@@ -104,6 +104,25 @@ go-httpbin  19,232 KiB
 
 Idle RSS before the run: gateway 5,472 KiB, identity 4,216 KiB.
 
+## GitHub Actions benchmark (v0.2.0)
+
+The release `Benchmark` workflow ran the containerized stack on an Ubuntu
+GitHub-hosted runner. Artifact `benchmark-43045334390` reports:
+
+```text
+Requests/sec: 8094.6865
+50.00% in 15.1369 ms
+99.00% in 32.9707 ms
+[200] 121344 responses
+
+Baseline direct httpbin: 30632.4549 req/s
+Gateway memory: 11.98 MiB
+Identity memory: 1.738 MiB
+```
+
+This is the reproducible containerized path; the native static runs above are
+faster because they skip Docker port forwarding.
+
 ## Image size
 
 ```text

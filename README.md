@@ -481,6 +481,7 @@ isolates the proxy rather than Redis network overhead.
 | Direct httpbin (no gateway) | 30,965 req/s | 1.24 ms | 31.17 ms | 19.3 MiB |
 | RustO2, 64 connections, JWT | 12,086 req/s | 4.59 ms | 15.39 ms | 18.0 MiB |
 | RustO2, 128 connections, JWT | **12,885 req/s** | 8.62 ms | 29.08 ms | **18.0 MiB** |
+| RustO2, GitHub Actions + Docker, 128 connections | 8,095 req/s | 15.14 ms | 32.97 ms | 12.0 MiB |
 | RustO2, rate limit 100 rps/client | 1,160 allowed / 264,885 rejected (`429`) in 8 s | 1.63 ms | 6.26 ms | — |
 
 The last row is the point of the throttle: while the limiter admitted about
@@ -529,11 +530,11 @@ The `Benchmark` GitHub Actions workflow runs the same containerized benchmark on
 every release tag and uploads the raw report as an artifact.
 
 The benchmark overlay disables rate limiting so the proxy + JWT path can be
-measured at full speed. Running through Docker's port forwarding on this host
-measured lower throughput (~6.5k req/s) than executing the same static binaries
-directly; the table above reports the binaries so it measures RustO2 rather than
-Docker Desktop's userland networking. To measure the limiter, run against the
-default stack; `/public` is capped at 10 rps per IP.
+measured at full speed. Running through Docker's port forwarding in the
+v0.2.0 GitHub Actions benchmark measured 8,095 req/s (p99 32.97 ms) versus
+12,885 req/s for the same static binaries directly; the table reports both so
+it is clear what is RustO2 and what is container networking. To measure the
+limiter, run against the default stack; `/public` is capped at 10 rps per IP.
 
 ## Kubernetes
 
