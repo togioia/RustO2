@@ -1,0 +1,36 @@
+[package]
+name = "rusto2-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Standalone workspace: the root workspace excludes `fuzz`, so cargo-fuzz gets
+# its own lockfile and normal workspace builds never pull in libFuzzer.
+[workspace]
+
+[dependencies]
+base64 = "0.22"
+jsonwebtoken = "9.3.1"
+libfuzzer-sys = "0.4"
+rusto2-common = { path = "../crates/rusto2-common" }
+serde_json = "1"
+
+[[bin]]
+name = "jwt_header"
+path = "fuzz_targets/jwt_header.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "env_expand"
+path = "fuzz_targets/env_expand.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = 1

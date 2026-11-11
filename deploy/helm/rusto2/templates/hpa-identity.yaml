@@ -1,0 +1,32 @@
+{{- if .Values.identity.autoscaling.enabled }}
+{{- if not (or .Values.identity.keys.existingSecret .Values.identity.persistence.enabled .Values.identity.persistence.existingClaim) }}
+{{- fail "identity.autoscaling.enabled requires identity.keys.existingSecret, identity.persistence.enabled, or identity.persistence.existingClaim so all replicas can share a signing key" }}
+{{- end }}
+{{- if lt (int .Values.identity.autoscaling.maxReplicas) (int .Values.identity.autoscaling.minReplicas) }}
+{{- fail "identity.autoscaling.maxReplicas must be greater than or equal to minReplicas" }}
+{{- end }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "rusto2.identity.fullname" . }}
+  labels:
+    {{- include "rusto2.componentLabels" (dict "root" . "component" "identity") | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "rusto2.identity.fullname" . }}
+  minReplicas: {{ .Values.identity.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.identity.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.identity.autoscaling.targetCPUUtilizationPercentage }}
+  {{- with .Values.identity.autoscaling.behavior }}
+  behavior:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

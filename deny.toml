@@ -1,0 +1,74 @@
+# Supply-chain policy for RustO2.
+#
+# Run locally with:
+#   bash scripts/cargo-deny.sh
+#
+# The wrapper is needed because this workspace's internal crates are not marked
+# `publish = false`; see the comment in that script and docs/SUPPLY_CHAIN.md.
+#
+# The allowlist is intentionally explicit and contains only licenses that are
+# actually reachable from the workspace dependency graph. Do not replace it
+# with a blanket "allow all": every new license should be a reviewed change.
+
+[graph]
+# Check the full graph for all targets. RustO2 ships linux/amd64 containers,
+# but `cargo deny` also sees host-only build dependencies (windows-sys, wasi,
+# etc.) and should keep them honest.
+all-features = false
+
+[advisories]
+# cargo-deny 0.20 removed the "warn" level for unmaintained advisories. Using
+# "workspace" means an unmaintained *direct* dependency fails the check, while
+# unmaintained transitive crates do not. The non-blocking cargo-audit job in CI
+# reports the complete set, including transitive crates.
+unmaintained = "workspace"
+unsound = "workspace"
+yanked = "warn"
+# Keep ignored advisories visible in the output.
+unused-ignored-advisory = "warn"
+# No ignores today. The only unmaintained advisory in the graph is
+# RUSTSEC-2024-0449 (unsafe-libyaml, pulled in transitively by serde_yaml);
+# `unmaintained = "workspace"` keeps it non-fatal, and the non-blocking
+# cargo-audit job still reports it. serde_yaml itself is deprecated but has no
+# advisory against the locked version.
+ignore = []
+
+[licenses]
+# Minimal set observed in Cargo.lock (including platform-specific crates):
+#   Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause, ISC, Unicode-3.0, Zlib,
+#   Unlicense, CDLA-Permissive-2.0.
+# MPL-2.0, CC0-1.0 and OpenSSL are deliberately absent: no crate in the graph
+# requires them.
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "Unlicense",
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+# Duplicate major versions are common in async Rust; report them but do not
+# break the build. Wildcard requirements are never acceptable.
+multiple-versions = "warn"
+wildcards = "deny"
+# The workspace uses path-only dependencies between its own (unpublished)
+# crates. Cargo requires those to be wildcard path dependencies; allowing
+# wildcard paths does not weaken the crates.io wildcard rule.
+allow-wildcard-paths = true
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+
+[sources]
+# Only crates.io is trusted. Git and alternative registries must be added here
+# deliberately, with a review.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

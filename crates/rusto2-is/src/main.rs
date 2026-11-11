@@ -1,5 +1,6 @@
 mod config;
 mod keys;
+mod revocation;
 mod routes;
 mod state;
 mod token;
@@ -33,6 +34,17 @@ async fn main() -> anyhow::Result<()> {
 
     let state = state::AppState::new(config, key, metrics)?;
     let listen = state.config.server.listen.clone();
+
+    let revocations = state.revocations.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            revocations.cleanup();
+        }
+    });
+
     let app = routes::router(state);
 
     let listener = TcpListener::bind(&listen)

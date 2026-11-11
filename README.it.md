@@ -28,6 +28,10 @@ Funzionalità principali:
 
 - rotte dichiarative in `rusto2.yaml` con metodi consentiti, scope richiesti,
   quota e circuit breaker;
+- rate limiting con backend in memoria o **Redis** (token bucket Lua atomico)
+  per condividere le quote tra repliche del gateway;
+- introspezione RFC 7662 e revoca RFC 7009 con blocklist `jti` e cache breve nel
+  gateway;
 - propagazione di `X-Forwarded-For`, `X-Forwarded-Proto`, `X-RustO2-Request-Id`
   e `X-Request-Id`;
 - validazione JWT locale tramite JWKS in cache, con refresh per rotazione chiavi;
@@ -35,7 +39,9 @@ Funzionalità principali:
   `X-RateLimit-*` / `Retry-After`;
 - circuit breaker per rotta con stato `closed` / `open` / `half_open`;
 - log strutturati JSON, metriche Prometheus e dashboard Grafana;
-- immagini Docker multi-stage distroless e stack demo con httpbin.
+- Helm chart Kubernetes con probe, HPA, PDB, NetworkPolicy e ServiceMonitor;
+- immagini Docker multi-stage distroless e stack demo con httpbin, Redis,
+  Prometheus e Grafana.
 
 ## Avvio rapido
 
@@ -79,6 +85,10 @@ cargo test --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
 ./scripts/smoke.sh
 ```
+
+Sono inclusi property test (`proptest`), un harness `cargo-fuzz` documentato in
+`docs/FUZZING.md`, il chart Helm in `deploy/helm/rusto2` e la policy supply
+chain in `docs/SUPPLY_CHAIN.md`.
 
 ## Nota sul progetto
 

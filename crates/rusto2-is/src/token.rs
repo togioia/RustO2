@@ -13,7 +13,7 @@ use axum::{
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use bytes::Bytes;
-use jsonwebtoken::{encode, Algorithm, Header};
+use jsonwebtoken::{decode, encode, Algorithm, Header, Validation};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
@@ -65,6 +65,15 @@ impl OAuthError {
         Self {
             status: StatusCode::BAD_REQUEST,
             code: "invalid_scope",
+            description: description.into(),
+            basic_challenge: false,
+        }
+    }
+
+    fn insufficient_scope(description: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            code: "insufficient_scope",
             description: description.into(),
             basic_challenge: false,
         }
@@ -227,6 +236,159 @@ pub async fn issue_token(
         }),
     )
         .into_response();
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        "no-store".parse().expect("static header value"),
+    );
+    response
+        .headers_mut()
+        .insert(PRAGMA, "no-cache".parse().expect("static header value"));
+    response
+}
+
+/// `POST /oauth2/introspect` (RFC 7662).
+pub async fn introspect(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let params = match parse_params(&headers, &body) {
+        Ok(params) => params,
+        Err(description) => {
+            return OAuthError::invalid_request(description).into_response_with_metrics(&state);
+        }
+    };
+
+    let client = match authenticate_client(&state, &headers, &params) {
+        Ok(client) => client,
+        Err(error) => return error.into_response_with_metrics(&state),
+    };
+    if !client.scopes.iter().any(|scope| scope == "introspect") {
+        return OAuthError::insufficient_scope("the client is not authorised to introspect tokens")
+            .into_response_with_metrics(&state);
+    }
+
+    let Some(token) = params.get("token").filter(|token| !token.is_empty()) else {
+        return OAuthError::invalid_request("token is required").into_response_with_metrics(&state);
+    };
+
+    let active = match decode_claims(&state, token, true) {
+        Ok(claims) => {
+            if state.revocations.is_revoked(&claims.jti) {
+                None
+            } else {
+                Some(claims)
+            }
+        }
+        Err(_) => None,
+    };
+
+    metrics::counter!(
+        "rusto2.identity.introspections.total",
+        "result" => if active.is_some() { "active" } else { "inactive" }
+    )
+    .increment(1);
+
+    let payload = match active {
+        Some(claims) => json!({
+            "active": true,
+            "sub": claims.sub,
+            "client_id": claims.client_id,
+            "scope": claims.scope,
+            "iss": claims.iss,
+            "aud": claims.aud,
+            "exp": claims.exp,
+            "iat": claims.iat,
+            "nbf": claims.nbf,
+            "jti": claims.jti,
+            "token_type": "Bearer",
+        }),
+        None => json!({ "active": false }),
+    };
+
+    no_store((StatusCode::OK, axum::Json(payload)).into_response())
+}
+
+/// `POST /oauth2/revoke` (RFC 7009). Only the client that owns the token can
+/// revoke it. Invalid or unknown tokens still return 200 to avoid token oracle
+/// behaviour, as required by the RFC.
+pub async fn revoke(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+    let params = match parse_params(&headers, &body) {
+        Ok(params) => params,
+        Err(description) => {
+            return OAuthError::invalid_request(description).into_response_with_metrics(&state);
+        }
+    };
+
+    let client = match authenticate_client(&state, &headers, &params) {
+        Ok(client) => client,
+        Err(error) => return error.into_response_with_metrics(&state),
+    };
+
+    let Some(token) = params.get("token").filter(|token| !token.is_empty()) else {
+        return OAuthError::invalid_request("token is required").into_response_with_metrics(&state);
+    };
+
+    // Revocation deliberately ignores `exp`: an expired token can still be
+    // declared revoked without changing the observable result.
+    if let Ok(claims) = decode_claims(&state, token, false) {
+        if claims.sub == client.client_id {
+            let jti = claims.jti.as_str();
+            if !jti.is_empty() {
+                state.revocations.revoke(jti, claims.exp);
+                metrics::counter!("rusto2.identity.revocations.total").increment(1);
+                tracing::info!(
+                    client_id = %client.client_id,
+                    jti = %jti,
+                    exp = claims.exp,
+                    "access token revoked"
+                );
+            }
+        } else {
+            tracing::debug!(
+                client_id = %client.client_id,
+                token_subject = %claims.sub,
+                "ignoring revocation request for a token owned by another client"
+            );
+        }
+    }
+
+    no_store(StatusCode::OK.into_response())
+}
+
+fn authenticate_client(
+    state: &AppState,
+    headers: &HeaderMap,
+    params: &HashMap<String, String>,
+) -> Result<std::sync::Arc<RegisteredClient>, OAuthError> {
+    let credentials = extract_credentials(headers, params)?;
+    state
+        .clients
+        .authenticate(&credentials.0, &credentials.1)
+        .ok_or_else(|| OAuthError::invalid_client("invalid client credentials"))
+}
+
+fn decode_claims(
+    state: &AppState,
+    token: &str,
+    validate_exp: bool,
+) -> Result<Claims, jsonwebtoken::errors::Error> {
+    let mut validation = Validation::new(Algorithm::EdDSA);
+    let required: &[&str] = if validate_exp {
+        &["exp", "iss", "aud", "sub"]
+    } else {
+        &["iss", "aud", "sub"]
+    };
+    validation.set_required_spec_claims(required);
+    validation.set_issuer(&[state.config.token.issuer.as_str()]);
+    validation.set_audience(&[state.config.token.audience.as_str()]);
+    validation.validate_exp = validate_exp;
+    validation.validate_nbf = validate_exp;
+
+    decode::<Claims>(token, &state.key.decoding, &validation).map(|data| data.claims)
+}
+
+fn no_store(mut response: Response) -> Response {
     response.headers_mut().insert(
         CACHE_CONTROL,
         "no-store".parse().expect("static header value"),

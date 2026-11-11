@@ -10,6 +10,7 @@ CLIENT_ID="${CLIENT_ID:-demo-client}"
 CLIENT_SECRET="${CLIENT_SECRET:-demo-secret}"
 READONLY_ID="${READONLY_ID:-readonly-client}"
 READONLY_SECRET="${READONLY_SECRET:-readonly-secret}"
+GATEWAY_SECRET="${GATEWAY_SECRET:-gateway-secret}"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "ok - $*"; }
@@ -58,6 +59,37 @@ pass "required scope is enforced"
 [ "$(status -H "Authorization: Bearer $READONLY_TOKEN" "$BASE_URL/api/get")" = "200" ] \
   || fail "read scope was rejected on the read route"
 pass "granted scope is accepted"
+
+# Introspection and revocation. Use a throw-away token so the main token can
+# still be used by the circuit-breaker test below.
+REVOKE_TOKEN=$(curl -sS -X POST "$IS_URL/oauth2/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data-urlencode "grant_type=client_credentials" \
+  --data-urlencode "client_id=$CLIENT_ID" \
+  --data-urlencode "client_secret=$CLIENT_SECRET" \
+  --data-urlencode "scope=write" | extract_token)
+[ -n "$REVOKE_TOKEN" ] || fail "token for revocation test was not issued"
+
+INTROSPECTION=$(curl -sS -u gateway-client:"$GATEWAY_SECRET" \
+  -d "token=$REVOKE_TOKEN" "$IS_URL/oauth2/introspect")
+echo "$INTROSPECTION" | grep -q '"active":true' \
+  || fail "introspection did not report an active token"
+
+[ "$(status -H "Authorization: Bearer $REVOKE_TOKEN" "$BASE_URL/admin/get")" = "200" ] \
+  || fail "admin route did not accept the active token"
+
+curl -sS -o /dev/null -u "$CLIENT_ID:$CLIENT_SECRET" \
+  -d "token=$REVOKE_TOKEN" "$IS_URL/oauth2/revoke"
+INTROSPECTION=$(curl -sS -u gateway-client:"$GATEWAY_SECRET" \
+  -d "token=$REVOKE_TOKEN" "$IS_URL/oauth2/introspect")
+echo "$INTROSPECTION" | grep -q '"active":false' \
+  || fail "introspection did not report the revoked token as inactive"
+pass "RFC 7662 introspection and RFC 7009 revocation work"
+
+sleep 6
+[ "$(status -H "Authorization: Bearer $REVOKE_TOKEN" "$BASE_URL/admin/get")" = "401" ] \
+  || fail "gateway did not enforce revocation after the cache window"
+pass "gateway enforces revoked jti after the cache window"
 
 [ "$(status "$BASE_URL/api/get")" = "401" ] \
   || fail "missing token did not return 401"

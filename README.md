@@ -46,12 +46,13 @@ Rust stack.
 |---|---|
 | API Gateway / Synapse mediation | `rusto2-gw`: axum server + streaming reqwest proxy |
 | Per-API security policy | Declarative routes in `rusto2.yaml` with method allowlists, JWT and scopes |
-| Key manager / OAuth2 token service | `rusto2-is`: `client_credentials`, Ed25519 JWTs, JWKS, discovery |
+| Key manager / OAuth2 token service | `rusto2-is`: `client_credentials`, Ed25519 JWTs, JWKS, discovery, RFC 7662/7009 |
 | JWT validation at the gateway | Axum middleware with in-memory JWKS cache and key rotation refresh |
-| Throttling | Sharded `DashMap` token bucket per `client_id` or client IP |
+| Throttling | Pluggable DashMap or Redis token bucket per `client_id` or client IP |
+| Token lifecycle | `jti` blocklist with TTL, opt-in introspection and a short gateway cache |
 | Endpoint circuit breaker | Per-route closed / open / half-open state machine |
 | Observability | JSON logs, request correlation, Prometheus metrics, Grafana dashboard |
-| Deployment | Multi-stage distroless images, Docker Compose one-click demo |
+| Deployment | Multi-stage distroless images, Docker Compose demo, Helm chart with probes/HPA/PDB |
 
 ### Feature checklist
 
@@ -63,11 +64,15 @@ Rust stack.
 - [x] Ed25519 key generation or PEM loading, `kid` thumbprint, JWKS ETag
 - [x] JWT signature, `iss`, `aud`, `exp`, `nbf` and scope validation
 - [x] Token-bucket rate limiting with `429`, `X-RateLimit-*`, `Retry-After`
+- [x] Pluggable quota backend: in-process DashMap or distributed Redis Lua
+- [x] RFC 7662 introspection, RFC 7009 revocation and gateway-side revocation cache
 - [x] Circuit breaker with `503` fail-fast and half-open recovery
 - [x] Prometheus counters, histograms and in-flight gauge on `/metrics`
 - [x] Structured JSON logs with request id, route, status and latency
-- [x] Docker Compose stack with httpbin, Prometheus and Grafana
-- [x] Unit tests, end-to-end smoke script, CI and reproducible benchmarks
+- [x] Docker Compose stack with httpbin, Redis, Prometheus and Grafana
+- [x] Helm chart with probes, HPA, PDB, NetworkPolicy and ServiceMonitor
+- [x] cargo-audit/cargo-deny, SBOM, cosign signing and SLSA provenance
+- [x] Unit tests, property tests, cargo-fuzz, end-to-end smoke script and CI
 
 ## Architecture
 
@@ -76,6 +81,7 @@ flowchart LR
     C["Client"]
     IS["rusto2-is<br/>OAuth2 + Ed25519 + JWKS<br/>:9000"]
     GW["rusto2-gw<br/>streaming proxy + policy engine<br/>:8080"]
+    R[("Redis<br/>distributed quotas")]
     B["Backend<br/>httpbin :8080"]
     P["Prometheus<br/>:9090"]
     G["Grafana<br/>:3000"]
@@ -84,10 +90,12 @@ flowchart LR
     IS -->|"2. signed JWT"| C
     C -->|"3. Bearer JWT"| GW
     GW -->|"4. GET /.well-known/jwks.json"| IS
-    GW -->|"5. verify signature + scope + quota"| GW
-    GW -->|"6. stream request"| B
-    B -->|"7. stream response"| GW
-    GW -->|"8. response + X-RustO2-Request-Id"| C
+    GW -->|"5. verify signature + scope"| GW
+    GW <-->|"6. token bucket (Lua)"| R
+    GW -->|"7. RFC 7662 (if enabled)"| IS
+    GW -->|"8. stream request"| B
+    B -->|"9. stream response"| GW
+    GW -->|"10. response + X-RustO2-Request-Id"| C
     GW -.->|"/metrics"| P
     P --> G
 ```
@@ -125,10 +133,17 @@ sequenceDiagram
 ### Traffic and resilience
 
 - **Token bucket.** Each `(route, client_id)` or `(route, IP)` key has a bucket
-  with `rps` refill and `burst` capacity. DashMap shards the state so unrelated
-  clients do not contend on the same lock. Idle buckets are garbage-collected.
+  with `rps` refill and `burst` capacity. The default in-memory backend shards
+  state with DashMap; the Redis backend runs the refill atomically in Lua so all
+  gateway replicas share the same quota. If Redis is down, `fail_open` decides
+  between availability and strict quota (`503`).
 - **429 responses** include `X-RateLimit-Limit`, `X-RateLimit-Remaining` and
-  `Retry-After`; the request never reaches the backend.
+  `Retry-After`; the request never reaches the backend. `X-RateLimit-Limit` is
+  the bucket capacity (`burst`), while `rps` is the sustained refill rate.
+- **Revocation.** Protected routes can opt into `revocation_check`. The gateway
+  caches RFC 7662 introspection results for a few seconds, so a revoked `jti`
+  stops working without paying an identity round trip on every request. Routes
+  without the flag keep the pure local-JWKS fast path.
 - **Circuit breaker.** Five consecutive upstream errors (configurable) open the
   route circuit. Requests fail fast with `503` and `Retry-After`. After the
   recovery window, a single half-open probe decides whether to close or reopen.
@@ -153,6 +168,7 @@ Then open:
 | Prometheus | http://localhost:9090 | — |
 | Grafana | http://localhost:3000 | `admin` / `admin` |
 | httpbin (direct) | http://localhost:8081 | — |
+| Redis | internal only (`redis:6379`) | — |
 
 Demo clients (override with environment variables):
 
@@ -160,9 +176,11 @@ Demo clients (override with environment variables):
 |---|---|---|
 | `demo-client` | `demo-secret` | `read`, `write`, `admin` |
 | `readonly-client` | `readonly-secret` | `read` |
+| `gateway-client` | `gateway-secret` | `introspect` (used by the gateway) |
 
 > The demo secrets are intentionally public. Replace them via
-> `RUSTO2_DEMO_SECRET` / `RUSTO2_READONLY_SECRET` before exposing anything.
+> `RUSTO2_DEMO_SECRET` / `RUSTO2_READONLY_SECRET` / `RUSTO2_GATEWAY_SECRET`
+> before exposing anything.
 
 ## curl cookbook
 
@@ -265,6 +283,30 @@ Decoded JWT payload:
 }
 ```
 
+### 6. Introspect and revoke a token
+
+```bash
+# Introspection (RFC 7662) uses the gateway-client credentials.
+curl -s -u gateway-client:gateway-secret \
+  -d "token=$TOKEN" \
+  http://localhost:9000/oauth2/introspect
+
+# Revoke the token as its owner (RFC 7009).
+curl -s -o /dev/null -w "%{http_code}\n" \
+  -u demo-client:demo-secret \
+  -d "token=$TOKEN" \
+  http://localhost:9000/oauth2/revoke
+
+# The introspection endpoint now returns active=false.
+curl -s -u gateway-client:gateway-secret \
+  -d "token=$TOKEN" \
+  http://localhost:9000/oauth2/introspect
+```
+
+`/admin` has `revocation_check: true`, so after the gateway's 5-second cache
+window a revoked token gets `401`. `/api` keeps the fast local-JWKS path and does
+not call introspection, which is the trade-off exposed by the per-route flag.
+
 ## Configuration
 
 ### `rusto2.yaml` — gateway
@@ -283,6 +325,17 @@ identity:
   jwks_url: http://localhost:9000/.well-known/jwks.json
   refresh_secs: 300
   leeway_secs: 15
+  introspection_url: http://localhost:9000/oauth2/introspect
+  introspection_client_id: gateway-client
+  introspection_client_secret: ${RUSTO2_GATEWAY_SECRET:-gateway-secret}
+  revocation_cache_secs: 5
+  revocation_fail_open: true
+
+rate_limiting:
+  backend: memory             # memory | redis
+  redis_url: redis://127.0.0.1:6379/0
+  key_prefix: "rusto2:ratelimit:"
+  fail_open: true
 
 routes:
   - name: httpbin
@@ -300,6 +353,20 @@ routes:
     circuit_breaker:
       failure_threshold: 5
       recovery_secs: 10
+
+  - name: admin
+    prefix: /admin
+    upstream: http://httpbin:8080
+    strip_prefix: true
+    methods: [GET]
+    auth:
+      mode: jwt
+      scopes: [write]
+      revocation_check: true
+    rate_limit:
+      rps: 30
+      burst: 60
+      key: client
 ```
 
 Routes are matched by longest prefix on segment boundaries, so `/api/v2` can
@@ -318,10 +385,16 @@ keys:
   private_key_path: ./data/ed25519.pem
   generate_if_missing: true
 
+revocation:
+  max_ttl_secs: 86400
+
 clients:
   - client_id: demo-client
     client_secret: ${RUSTO2_DEMO_SECRET:-demo-secret}
     scopes: [read, write, admin]
+  - client_id: gateway-client
+    client_secret: ${RUSTO2_GATEWAY_SECRET:-gateway-secret}
+    scopes: [introspect]
 ```
 
 If the PEM file is absent and `generate_if_missing` is true, a new Ed25519
@@ -338,6 +411,15 @@ expanded from the environment.
 | `RUSTO2_JWKS_URL` | gateway | Internal JWKS URL |
 | `RUSTO2_RATE_LIMIT_RPS` | gateway | Override every route's `rps`; `0` disables limiting |
 | `RUSTO2_RATE_LIMIT_BURST` | gateway | Override every route's burst |
+| `RUSTO2_RATE_LIMIT_BACKEND` | gateway | `memory` or `redis` |
+| `RUSTO2_REDIS_URL` | gateway | Redis URL for distributed quotas |
+| `RUSTO2_RATE_LIMIT_PREFIX` | gateway | Redis key namespace |
+| `RUSTO2_RATE_LIMIT_FAIL_OPEN` | gateway | Allow traffic when Redis is unavailable |
+| `RUSTO2_INTROSPECTION_URL` | gateway | RFC 7662 endpoint |
+| `RUSTO2_GATEWAY_CLIENT_ID` | gateway | Client id used for introspection |
+| `RUSTO2_GATEWAY_SECRET` | both | Gateway introspection client secret |
+| `RUSTO2_REVOCATION_CACHE_SECS` | gateway | Introspection result cache TTL |
+| `RUSTO2_REVOCATION_FAIL_OPEN` | gateway | Allow traffic when introspection fails |
 | `RUSTO2_IS_LISTEN` | identity | Override listen address |
 | `RUSTO2_ISSUER` | identity | Override the issuer placed in tokens |
 | `RUSTO2_AUDIENCE` | identity | Override the JWT audience |
@@ -360,15 +442,21 @@ Metrics exposed by the gateway:
 | `rusto2_http_request_duration_seconds` | histogram | `route` |
 | `rusto2_auth_failures_total` | counter | `reason`, `route` |
 | `rusto2_rate_limited_total` | counter | `route` |
+| `rusto2_rate_limit_errors_total` | counter | `route`, `backend` |
 | `rusto2_circuit_open_total` | counter | `route` |
 | `rusto2_circuit_rejected_total` | counter | `route` |
+| `rusto2_revocation_errors_total` | counter | `route` |
 | `rusto2_upstream_errors_total` | counter | `route` |
 | `rusto2_gateway_inflight` | gauge | — |
 | `rusto2_identity_tokens_issued_total` | counter | `client` |
 | `rusto2_identity_token_errors_total` | counter | `reason` |
+| `rusto2_identity_introspections_total` | counter | `result` |
+| `rusto2_identity_revocations_total` | counter | — |
 
 The Grafana dashboard is provisioned automatically from
-`deploy/grafana/dashboards/rusto2.json`.
+`deploy/grafana/dashboards/rusto2.json`. Prometheus alert rules for auth failure
+spikes, quota-backend errors, open circuits, upstream errors and introspection
+failures live in `deploy/prometheus/alerts.yml`.
 
 ## Performance
 
@@ -384,7 +472,9 @@ connections for 15 seconds after a 3-second warm-up.
 Every request carried a pre-issued Ed25519 JWT; signature, issuer, audience,
 expiry and scope were validated on the gateway, with the JWKS cached in memory.
 Rate limiting was disabled for the throughput rows so the proxy path is measured,
-then enabled for the throttling row.
+then enabled for the throttling row. The default Compose stack uses Redis for
+distributed quotas; the benchmark overlay pins the in-memory backend so the table
+isolates the proxy rather than Redis network overhead.
 
 | Scenario | Throughput | p50 | p99 | RSS under load |
 |---|---:|---:|---:|---:|
@@ -402,16 +492,16 @@ and the backend never saw them. The p99 of that run is dominated by the fast
 
 | Process | Idle RSS | RSS after 15 s at 12.9k req/s |
 |---|---:|---:|
-| `rusto2-gw` | 5.3 MiB | 18.0 MiB |
-| `rusto2-is` | 3.8 MiB | 4.0 MiB |
+| `rusto2-gw` | 5.3 MiB | 17.9 MiB |
+| `rusto2-is` | 4.1 MiB | 4.2 MiB |
 
 Container images, both based on distroless static Debian and statically linked
 against musl:
 
 | Image | Size |
 |---|---:|
-| `rusto2-gw:dev` | **8.27 MB** |
-| `rusto2-is:dev` | **6.10 MB** |
+| `rusto2-gw:dev` | **8.75 MB** |
+| `rusto2-is:dev` | **6.32 MB** |
 
 RustO2 uses the mimalloc global allocator with immediate purging
 (`MIMALLOC_PURGE_DELAY=0`) to avoid retaining freed arenas. There is no JVM heap,
@@ -420,10 +510,12 @@ stop-the-world pause.
 
 These are orders of magnitude, not a vendor benchmark: the load generator and
 the services shared the same 8 vCPUs, and WSL2 scheduling noise is visible in the
-baseline p99. The interesting result is that the gateway adds a constant, small
-memory cost and no GC pauses, so latency stays bounded under concurrency. The
-64-connection run shows the latency profile without queueing: p50 4.6 ms,
-p99 15.4 ms.
+baseline p99. Repeated 15-second runs of the same build ranged from roughly
+8.9k to 12.9k req/s, so treat the absolute RPS as indicative rather than a
+laboratory measurement. The interesting result is that the gateway adds a
+constant, small memory cost and no GC pauses, so latency stays bounded under
+concurrency. The 64-connection run shows the latency profile without queueing:
+p50 4.6 ms, p99 15.4 ms.
 
 Reproduce:
 
@@ -433,6 +525,8 @@ bash scripts/bench.sh
 ```
 
 Raw summaries and environment details: [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+The `Benchmark` GitHub Actions workflow runs the same containerized benchmark on
+every release tag and uploads the raw report as an artifact.
 
 The benchmark overlay disables rate limiting so the proxy + JWT path can be
 measured at full speed. Running through Docker's port forwarding on this host
@@ -440,6 +534,42 @@ measured lower throughput (~6.5k req/s) than executing the same static binaries
 directly; the table above reports the binaries so it measures RustO2 rather than
 Docker Desktop's userland networking. To measure the limiter, run against the
 default stack; `/public` is capped at 10 rps per IP.
+
+## Kubernetes
+
+A production-minded Helm chart lives in `deploy/helm/rusto2`: ConfigMaps for the
+routes and clients, Secret/PVC handling for the signing key, liveness and
+readiness probes, gateway HPA, PodDisruptionBudgets, NetworkPolicies and an
+optional ServiceMonitor. The chart does not deploy a backend or Redis; point its
+values at your own services.
+
+```bash
+helm upgrade --install rusto2 deploy/helm/rusto2 \
+  --namespace rusto2 --create-namespace
+kubectl -n rusto2 port-forward svc/rusto2-gw 8080:8080
+```
+
+See [docs/KUBERNETES.md](docs/KUBERNETES.md) for image loading, HPA, key
+sharing, Redis quotas and revocation settings.
+
+## Supply chain
+
+On a `v*` tag, the release workflow builds the two images, publishes them to
+GHCR, generates SPDX SBOMs with Syft, signs the image digests keyless with
+cosign and attaches SLSA build provenance. CI also runs `cargo-audit`
+(non-blocking advisory scan) and `cargo-deny` (blocking policy gate).
+
+```bash
+cosign verify ghcr.io/togioia/rusto2-gw:0.2.0 \
+  --certificate-identity-regexp 'https://github.com/togioia/RustO2/.github/workflows/release.yml@.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+gh attestation verify oci://ghcr.io/togioia/rusto2-gw:0.2.0 \
+  --repo togioia/RustO2
+```
+
+See [docs/SUPPLY_CHAIN.md](docs/SUPPLY_CHAIN.md) for the full policy, SBOM
+artifacts and verification commands.
 
 ## Testing
 
@@ -450,20 +580,26 @@ cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 The smoke script covers token issuance, JWKS, valid/invalid/missing JWT, scope
-enforcement, method allowlists, anonymous routes, `429` rate limiting, circuit
-breaker opening and recovery, and Prometheus output.
+enforcement, method allowlists, anonymous routes, `429` rate limiting,
+RFC 7662/7009 introspection/revocation, circuit breaker opening and recovery,
+and Prometheus output.
+
+Property-based tests live in the crate test modules; the JWT header and env
+expander fuzz targets are documented in [docs/FUZZING.md](docs/FUZZING.md).
 
 ## Repository layout
 
 ```text
 crates/
   rusto2-common/   telemetry, request correlation, env expansion
-  rusto2-is/       OAuth2 client_credentials, Ed25519 keys, JWKS
-  rusto2-gw/       proxy, route policy, JWT filter, rate limiter, breaker
+  rusto2-is/       OAuth2 client_credentials, Ed25519 keys, JWKS, revocation
+  rusto2-gw/       proxy, route policy, JWT filter, quota backends, breaker
 deploy/
-  prometheus/      scrape configuration
+  prometheus/      scrape configuration and alert rules
   grafana/         datasource, dashboard provisioning, dashboard JSON
+  helm/rusto2/     production-minded Kubernetes chart
 docker/            multi-stage distroless Dockerfiles
+fuzz/              cargo-fuzz targets (excluded from the normal workspace)
 scripts/           demo, smoke, benchmark and oha installer
 rusto2.yaml        gateway routes and policies
 rusto2-is.yaml     clients, issuer, key location
@@ -481,20 +617,28 @@ rusto2-is.yaml     clients, issuer, key location
   algorithm-confusion attacks. RSA support would be a small extension.
 - **Single identity-server key.** Key rotation is supported through the JWKS
   refresh path, but `rusto2-is` publishes one active key at a time.
-- **In-memory quotas.** Rate-limit buckets and circuit state are per gateway
-  instance. A multi-instance deployment needs a shared limiter (e.g. Redis).
-- **Not production hardened.** There is no TLS listener, admin API, token
-  revocation, refresh token flow, OAuth2 authorization code/PKCE or persistent
-  audit log. See [SECURITY.md](SECURITY.md).
+- **In-memory quotas.** The default rate-limit backend and circuit state are per
+  gateway instance. The Redis backend solves quotas for multi-replica
+  deployments; circuit state is still local. Revocation entries live in the
+  identity server's memory, so a multi-replica `rusto2-is` needs a shared store.
+- **Revocation is opt-in and eventually consistent.** `/admin` checks a
+  short-lived introspection cache; `/api` keeps the zero-network local-JWKS
+  fast path. Revocations live in the identity server's memory and are lost on
+  restart or when scaling to multiple identity replicas.
+- **Not production hardened.** There is no TLS listener, admin API, refresh token
+  flow, OAuth2 authorization code/PKCE or persistent audit log. See
+  [SECURITY.md](SECURITY.md).
 
 ## Roadmap
 
 - TLS termination and HTTP/3 at the edge
-- Redis-backed distributed quotas
-- OpenTelemetry OTLP traces in addition to JSON logs
-- Helm chart and Kubernetes probes
+- OpenTelemetry OTLP traces exported to Tempo/Jaeger, with trace-context
+  propagation through the gateway
+- Hot reload of `rusto2.yaml` via SIGHUP or a file watcher
+- Shared revocation store for a multi-replica identity server
+- Fuzzing and property tests wired into scheduled CI
 - Pluggable request/response transformers (the "mediation" counterpart)
-- JWT key rotation with overlapping keys and configurable grace periods
+- Overlapping JWT key rotation with a configurable grace period
 
 ## License
 

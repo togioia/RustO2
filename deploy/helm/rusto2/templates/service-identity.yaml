@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rusto2.identity.fullname" . }}
+  labels:
+    {{- include "rusto2.componentLabels" (dict "root" . "component" "identity") | nindent 4 }}
+    {{- with .Values.identity.service.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.identity.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.identity.service.type }}
+  selector:
+    {{- include "rusto2.componentSelectorLabels" (dict "root" . "component" "identity") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.identity.service.port }}
+      targetPort: http
+      protocol: TCP

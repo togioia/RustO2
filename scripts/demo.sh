@@ -11,6 +11,7 @@ CLIENT_ID="${CLIENT_ID:-demo-client}"
 CLIENT_SECRET="${CLIENT_SECRET:-demo-secret}"
 READONLY_ID="${READONLY_ID:-readonly-client}"
 READONLY_SECRET="${READONLY_SECRET:-readonly-secret}"
+GATEWAY_SECRET="${GATEWAY_SECRET:-gateway-secret}"
 
 bold() { printf '\n\033[1;36m== %s ==\033[0m\n' "$*"; }
 ok() { printf '\033[1;32m%s\033[0m\n' "$*"; }
@@ -86,6 +87,22 @@ for _ in $(seq 1 40); do
   fi
 done
 printf 'requests blocked with 429: %s/40\n' "$blocked"
+
+bold "Revocation: issue, introspect, revoke, introspect"
+TMP_TOKEN=$(curl -sS -X POST "$IS_URL/oauth2/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data-urlencode "grant_type=client_credentials" \
+  --data-urlencode "client_id=$CLIENT_ID" \
+  --data-urlencode "client_secret=$CLIENT_SECRET" \
+  --data-urlencode "scope=write" | extract_token)
+curl -sS -u gateway-client:"$GATEWAY_SECRET" \
+  -d "token=$TMP_TOKEN" "$IS_URL/oauth2/introspect" | head -c 220
+printf '\n'
+curl -sS -o /dev/null -w 'revoke HTTP %{http_code}\n' \
+  -u "$CLIENT_ID:$CLIENT_SECRET" -d "token=$TMP_TOKEN" "$IS_URL/oauth2/revoke"
+curl -sS -u gateway-client:"$GATEWAY_SECRET" \
+  -d "token=$TMP_TOKEN" "$IS_URL/oauth2/introspect"
+printf '\n'
 
 bold "Metrics snapshot"
 curl -sS "$BASE_URL/metrics" | grep -E '^rusto2_(http_requests|auth_failures|rate_limited|circuit_open)' | head -n 12 || true

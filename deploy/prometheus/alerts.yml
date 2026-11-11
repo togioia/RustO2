@@ -1,0 +1,46 @@
+groups:
+  - name: rusto2
+    rules:
+      - alert: RustO2HighAuthFailureRate
+        expr: sum(rate(rusto2_auth_failures_total[5m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RustO2 is rejecting many authentication attempts"
+          description: "More than 5 auth failures/s for 5 minutes. Check token issuance, JWKS and scopes."
+
+      - alert: RustO2RateLimiterBackendErrors
+        expr: sum(rate(rusto2_rate_limit_errors_total[5m])) > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis quota backend is failing"
+          description: "RustO2 cannot reach the distributed rate limiter. Requests are following the configured fail-open/fail-closed policy."
+
+      - alert: RustO2CircuitOpen
+        expr: increase(rusto2_circuit_open_total[5m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "A RustO2 backend circuit opened"
+          description: "Consecutive 5xx responses opened the circuit for {{ $labels.route }}."
+
+      - alert: RustO2UpstreamErrorRate
+        expr: sum by (route) (rate(rusto2_upstream_errors_total[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated upstream error rate on {{ $labels.route }}"
+          description: "More than 1 upstream error/s for 5 minutes."
+
+      - alert: RustO2RevocationBackendErrors
+        expr: sum(rate(rusto2_revocation_errors_total[5m])) > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "RFC 7662 introspection is failing"
+          description: "Routes with revocation_check may be failing open or closed depending on configuration."

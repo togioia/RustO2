@@ -9,9 +9,10 @@ use reqwest::Client;
 
 use crate::{
     circuit_breaker::BreakerRegistry,
-    config::GatewayConfig,
+    config::{GatewayConfig, RateLimitStore},
     jwks::JwksCache,
-    rate_limit::RateLimiter,
+    rate_limit::{MemoryRateLimiter, RateLimitBackend, RedisRateLimiter},
+    revocation::RevocationChecker,
     routes::{self, CompiledRoute},
 };
 
@@ -21,7 +22,8 @@ pub struct AppState {
     pub routes: Arc<Vec<Arc<CompiledRoute>>>,
     pub client: Client,
     pub jwks: Arc<JwksCache>,
-    pub limiter: Arc<RateLimiter>,
+    pub limiter: Arc<dyn RateLimitBackend>,
+    pub revocations: Option<Arc<RevocationChecker>>,
     pub breakers: Arc<BreakerRegistry>,
     pub metrics: PrometheusHandle,
     pub started: Instant,
@@ -33,7 +35,7 @@ const _: fn() = || {
 };
 
 impl AppState {
-    pub fn build(config: GatewayConfig, metrics: PrometheusHandle) -> anyhow::Result<Self> {
+    pub async fn build(config: GatewayConfig, metrics: PrometheusHandle) -> anyhow::Result<Self> {
         let routes = Arc::new(routes::compile(&config)?);
 
         let client = Client::builder()
@@ -54,12 +56,42 @@ impl AppState {
         ));
         let breakers = Arc::new(BreakerRegistry::from_routes(&routes));
 
+        let limiter: Arc<dyn RateLimitBackend> = match config.rate_limiting.backend {
+            RateLimitStore::Memory => Arc::new(MemoryRateLimiter::new()),
+            RateLimitStore::Redis => Arc::new(
+                RedisRateLimiter::connect(
+                    &config.rate_limiting.redis_url,
+                    &config.rate_limiting.key_prefix,
+                )
+                .await
+                .context("cannot initialise the Redis rate limiter")?,
+            ),
+        };
+
+        let revocations = match (
+            config.identity.introspection_url.as_ref(),
+            config.identity.introspection_client_id.as_ref(),
+            config.identity.introspection_client_secret.as_ref(),
+        ) {
+            (Some(url), Some(client_id), Some(client_secret)) => {
+                Some(Arc::new(RevocationChecker::new(
+                    client.clone(),
+                    url.clone(),
+                    client_id.clone(),
+                    client_secret.clone(),
+                    Duration::from_secs(config.identity.revocation_cache_secs),
+                )))
+            }
+            _ => None,
+        };
+
         Ok(Self {
             config: Arc::new(config),
             routes,
             client,
             jwks,
-            limiter: Arc::new(RateLimiter::new()),
+            limiter,
+            revocations,
             breakers,
             metrics,
             started: Instant::now(),

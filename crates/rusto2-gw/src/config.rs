@@ -9,6 +9,8 @@ pub struct GatewayConfig {
     pub server: ServerConfig,
     pub identity: IdentityConfig,
     #[serde(default)]
+    pub rate_limiting: RateLimitingConfig,
+    #[serde(default)]
     pub routes: Vec<RouteConfig>,
 }
 
@@ -66,6 +68,21 @@ pub struct IdentityConfig {
     pub refresh_secs: u64,
     #[serde(default = "default_leeway")]
     pub leeway_secs: u64,
+    /// RFC 7662 endpoint used by routes that enable `auth.revocation_check`.
+    #[serde(default)]
+    pub introspection_url: Option<String>,
+    #[serde(default)]
+    pub introspection_client_id: Option<String>,
+    #[serde(default)]
+    pub introspection_client_secret: Option<String>,
+    #[serde(default = "default_revocation_cache")]
+    pub revocation_cache_secs: u64,
+    #[serde(default = "default_true")]
+    pub revocation_fail_open: bool,
+}
+
+fn default_revocation_cache() -> u64 {
+    5
 }
 
 fn default_refresh() -> u64 {
@@ -73,6 +90,49 @@ fn default_refresh() -> u64 {
 }
 fn default_leeway() -> u64 {
     15
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RateLimitingConfig {
+    /// `memory` keeps quotas per gateway process. `redis` shares token buckets
+    /// across replicas through an atomic Lua script.
+    #[serde(default)]
+    pub backend: RateLimitStore,
+    #[serde(default = "default_redis_url")]
+    pub redis_url: String,
+    #[serde(default = "default_key_prefix")]
+    pub key_prefix: String,
+    /// If Redis is unavailable, allow the request (availability over strict
+    /// quota) instead of failing closed with 503.
+    #[serde(default = "default_true")]
+    pub fail_open: bool,
+}
+
+impl Default for RateLimitingConfig {
+    fn default() -> Self {
+        Self {
+            backend: RateLimitStore::Memory,
+            redis_url: default_redis_url(),
+            key_prefix: default_key_prefix(),
+            fail_open: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RateLimitStore {
+    #[default]
+    Memory,
+    Redis,
+}
+
+fn default_redis_url() -> String {
+    "redis://127.0.0.1:6379/0".to_owned()
+}
+
+fn default_key_prefix() -> String {
+    "rusto2:ratelimit:".to_owned()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -111,6 +171,10 @@ pub struct AuthConfig {
     pub mode: AuthMode,
     #[serde(default)]
     pub scopes: Vec<String>,
+    /// Ask the identity server (RFC 7662) whether the token's `jti` has been
+    /// revoked. Results are cached briefly in the gateway.
+    #[serde(default)]
+    pub revocation_check: bool,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
@@ -188,6 +252,29 @@ impl GatewayConfig {
         if let Ok(value) = env::var("RUSTO2_JWKS_URL") {
             self.identity.jwks_url = value;
         }
+        if let Ok(value) = env::var("RUSTO2_INTROSPECTION_URL") {
+            self.identity.introspection_url = Some(value);
+        }
+        if let Ok(value) = env::var("RUSTO2_GATEWAY_CLIENT_ID") {
+            self.identity.introspection_client_id = Some(value);
+        }
+        if let Ok(value) =
+            env::var("RUSTO2_GATEWAY_SECRET").or_else(|_| env::var("RUSTO2_GATEWAY_CLIENT_SECRET"))
+        {
+            self.identity.introspection_client_secret = Some(value);
+        }
+        if let Ok(value) = env::var("RUSTO2_REVOCATION_CACHE_SECS") {
+            self.identity.revocation_cache_secs = value
+                .parse()
+                .context("RUSTO2_REVOCATION_CACHE_SECS must be an integer")?;
+        }
+        if let Ok(value) = env::var("RUSTO2_REVOCATION_FAIL_OPEN") {
+            self.identity.revocation_fail_open = match value.to_ascii_lowercase().as_str() {
+                "true" | "1" | "yes" => true,
+                "false" | "0" | "no" => false,
+                _ => bail!("RUSTO2_REVOCATION_FAIL_OPEN must be true or false"),
+            };
+        }
         if let Ok(value) = env::var("RUSTO2_RATE_LIMIT_RPS") {
             let rps: u32 = value
                 .parse()
@@ -210,6 +297,26 @@ impl GatewayConfig {
                     policy.burst = Some(burst);
                 }
             }
+        }
+        if let Ok(value) = env::var("RUSTO2_RATE_LIMIT_BACKEND") {
+            self.rate_limiting.backend = match value.to_ascii_lowercase().as_str() {
+                "memory" => RateLimitStore::Memory,
+                "redis" => RateLimitStore::Redis,
+                _ => bail!("RUSTO2_RATE_LIMIT_BACKEND must be 'memory' or 'redis'"),
+            };
+        }
+        if let Ok(value) = env::var("RUSTO2_REDIS_URL") {
+            self.rate_limiting.redis_url = value;
+        }
+        if let Ok(value) = env::var("RUSTO2_RATE_LIMIT_PREFIX") {
+            self.rate_limiting.key_prefix = value;
+        }
+        if let Ok(value) = env::var("RUSTO2_RATE_LIMIT_FAIL_OPEN") {
+            self.rate_limiting.fail_open = match value.to_ascii_lowercase().as_str() {
+                "true" | "1" | "yes" => true,
+                "false" | "0" | "no" => false,
+                _ => bail!("RUSTO2_RATE_LIMIT_FAIL_OPEN must be true or false"),
+            };
         }
         Ok(())
     }
@@ -240,6 +347,50 @@ impl GatewayConfig {
         }
         if self.identity.refresh_secs == 0 {
             bail!("identity.refresh_secs must be greater than zero");
+        }
+        if self.rate_limiting.key_prefix.is_empty() {
+            bail!("rate_limiting.key_prefix must not be empty");
+        }
+        if self.rate_limiting.backend == RateLimitStore::Redis
+            && self.rate_limiting.redis_url.trim().is_empty()
+        {
+            bail!("rate_limiting.redis_url must be set when backend=redis");
+        }
+        if self.identity.revocation_cache_secs == 0 {
+            bail!("identity.revocation_cache_secs must be greater than zero");
+        }
+
+        let needs_introspection = self.routes.iter().any(|route| route.auth.revocation_check);
+        if needs_introspection {
+            if self
+                .identity
+                .introspection_url
+                .as_deref()
+                .unwrap_or_default()
+                .is_empty()
+            {
+                bail!(
+                    "identity.introspection_url is required when a route enables revocation_check"
+                );
+            }
+            if self
+                .identity
+                .introspection_client_id
+                .as_deref()
+                .unwrap_or_default()
+                .is_empty()
+            {
+                bail!("identity.introspection_client_id is required when a route enables revocation_check");
+            }
+            if self
+                .identity
+                .introspection_client_secret
+                .as_deref()
+                .unwrap_or_default()
+                .is_empty()
+            {
+                bail!("identity.introspection_client_secret is required when a route enables revocation_check");
+            }
         }
 
         let mut names = HashSet::new();
@@ -373,5 +524,26 @@ routes:
         let mut config: GatewayConfig = serde_yaml::from_str(base_yaml()).expect("yaml");
         config.routes[0].rate_limit.as_mut().unwrap().rps = 0;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn requires_introspection_credentials_for_revocation_check() {
+        let mut config: GatewayConfig = serde_yaml::from_str(base_yaml()).expect("yaml");
+        config.routes[0].auth.revocation_check = true;
+        assert!(config.validate().is_err());
+
+        config.identity.introspection_url = Some("http://issuer/introspect".into());
+        config.identity.introspection_client_id = Some("gateway-client".into());
+        config.identity.introspection_client_secret = Some("secret".into());
+        config
+            .validate()
+            .expect("valid with introspection settings");
+    }
+
+    #[test]
+    fn rate_limiting_defaults_to_memory() {
+        let config: GatewayConfig = serde_yaml::from_str(base_yaml()).expect("yaml");
+        assert_eq!(config.rate_limiting.backend, RateLimitStore::Memory);
+        assert!(config.rate_limiting.fail_open);
     }
 }

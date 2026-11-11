@@ -13,7 +13,7 @@ jobs:
     name: Format, lint and test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -31,10 +31,59 @@ jobs:
     name: Build container images
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build gateway image
         run: docker build -f docker/gateway.Dockerfile -t rusto2-gw:ci .
       - name: Build identity image
         run: docker build -f docker/identity.Dockerfile -t rusto2-is:ci .
       - name: Show image sizes
         run: docker image ls 'rusto2-*'
+
+  audit:
+    # Advisory visibility only: a new RustSec advisory must not block a merge
+    # before the dependency can reasonably be upgraded. cargo-deny below is
+    # the blocking policy gate.
+    name: Advisory scan (non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.99.0"
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: Resolve the full dependency graph
+        # Cargo.lock can legitimately lag behind workspace manifests during a
+        # feature branch. Resolve in the runner so the scan sees redis and any
+        # other newly added optional dependencies too.
+        run: cargo metadata --format-version 1 > /dev/null
+      - name: cargo audit
+        run: |
+          cargo audit --version
+          cargo audit
+
+  deny:
+    name: Supply-chain policy (cargo-deny)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.99.0"
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+      - name: cargo-deny
+        # The wrapper checks a throwaway copy so the workspace's internal path
+        # dependencies are treated as private without editing Cargo.toml.
+        run: |
+          cargo deny --version
+          bash scripts/cargo-deny.sh

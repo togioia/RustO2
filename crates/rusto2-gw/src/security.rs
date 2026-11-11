@@ -24,6 +24,8 @@ pub struct Claims {
     pub sub: String,
     #[serde(default)]
     pub client_id: Option<String>,
+    #[serde(default)]
+    pub jti: Option<String>,
     /// OAuth2 space-delimited `scope` claim.
     #[serde(default)]
     pub scope: Option<String>,
@@ -56,6 +58,8 @@ enum AuthFailure {
     MalformedToken,
     InvalidToken,
     UnknownKey,
+    Revoked,
+    RevocationUnavailable,
     InsufficientScope(String),
 }
 
@@ -66,6 +70,8 @@ impl AuthFailure {
             Self::MalformedToken => "malformed_token",
             Self::InvalidToken => "invalid_token",
             Self::UnknownKey => "unknown_key",
+            Self::Revoked => "revoked_token",
+            Self::RevocationUnavailable => "revocation_check_failed",
             Self::InsufficientScope(_) => "insufficient_scope",
         }
     }
@@ -76,6 +82,10 @@ impl AuthFailure {
             Self::MalformedToken => "the Authorization header is malformed".to_owned(),
             Self::InvalidToken => "the access token is invalid or expired".to_owned(),
             Self::UnknownKey => "the token signing key is not published by the issuer".to_owned(),
+            Self::Revoked => "the access token has been revoked".to_owned(),
+            Self::RevocationUnavailable => {
+                "token revocation status could not be verified".to_owned()
+            }
             Self::InsufficientScope(scope) => {
                 format!("the access token does not grant the required scope: {scope}")
             }
@@ -158,6 +168,40 @@ async fn authenticate(
         }
     }
 
+    if route.cfg.auth.revocation_check {
+        let Some(jti) = claims.jti.as_deref() else {
+            return Err(AuthFailure::InvalidToken);
+        };
+        let Some(checker) = state.revocations.as_ref() else {
+            tracing::error!(
+                route = %route.cfg.name,
+                "revocation_check is enabled but no introspection client is configured"
+            );
+            return Err(AuthFailure::RevocationUnavailable);
+        };
+
+        match checker.is_active(jti, &token).await {
+            Ok(true) => {}
+            Ok(false) => return Err(AuthFailure::Revoked),
+            Err(error) => {
+                metrics::counter!(
+                    "rusto2.revocation.errors.total",
+                    "route" => route.cfg.name.clone()
+                )
+                .increment(1);
+                tracing::warn!(
+                    route = %route.cfg.name,
+                    error = %error,
+                    fail_open = state.config.identity.revocation_fail_open,
+                    "introspection check failed"
+                );
+                if !state.config.identity.revocation_fail_open {
+                    return Err(AuthFailure::RevocationUnavailable);
+                }
+            }
+        }
+    }
+
     Ok(AuthContext {
         client_id: claims
             .client_id
@@ -231,8 +275,18 @@ async fn validate_token(state: &AppState, token: &str) -> Result<Claims, AuthFai
 fn auth_failure_response(failure: AuthFailure) -> Response {
     let status = match failure {
         AuthFailure::InsufficientScope(_) => StatusCode::FORBIDDEN,
+        AuthFailure::RevocationUnavailable => StatusCode::SERVICE_UNAVAILABLE,
         _ => StatusCode::UNAUTHORIZED,
     };
+
+    if status == StatusCode::SERVICE_UNAVAILABLE {
+        let mut response = json_error(status, failure.reason(), &failure.description());
+        response.headers_mut().insert(
+            axum::http::header::RETRY_AFTER,
+            HeaderValue::from_static("1"),
+        );
+        return response;
+    }
 
     let challenge = match &failure {
         AuthFailure::InsufficientScope(scope) => format!(
@@ -264,6 +318,7 @@ mod tests {
         Claims {
             sub: "client".to_owned(),
             client_id: None,
+            jti: None,
             scope: scope.map(ToOwned::to_owned),
             scp: scp.map(|values| values.iter().map(|value| (*value).to_owned()).collect()),
         }

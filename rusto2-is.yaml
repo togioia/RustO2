@@ -10,6 +10,9 @@ keys:
   private_key_path: ./data/ed25519.pem
   generate_if_missing: true
 
+revocation:
+  max_ttl_secs: 86400
+
 clients:
   - client_id: demo-client
     client_secret: ${RUSTO2_DEMO_SECRET:-demo-secret}
@@ -17,3 +20,6 @@ clients:
   - client_id: readonly-client
     client_secret: ${RUSTO2_READONLY_SECRET:-readonly-secret}
     scopes: [read]
+  - client_id: gateway-client
+    client_secret: ${RUSTO2_GATEWAY_SECRET:-gateway-secret}
+    scopes: [introspect]

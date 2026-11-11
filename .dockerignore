@@ -2,6 +2,8 @@ target
 .git
 .github
 data
+fuzz
+deploy
 *.log
 .env
 README.md

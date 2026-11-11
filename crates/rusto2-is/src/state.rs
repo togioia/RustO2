@@ -5,7 +5,7 @@ use metrics_exporter_prometheus::PrometheusHandle;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
-use crate::{config::Config, keys::KeyMaterial};
+use crate::{config::Config, keys::KeyMaterial, revocation::RevocationStore};
 
 /// A client whose secret is stored only as a SHA-256 digest. The raw secret is
 /// never kept in memory after startup.
@@ -69,6 +69,7 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub clients: Arc<ClientRegistry>,
     pub key: Arc<KeyMaterial>,
+    pub revocations: Arc<RevocationStore>,
     pub metrics: PrometheusHandle,
     pub started: Instant,
 }
@@ -80,10 +81,14 @@ impl AppState {
         metrics: PrometheusHandle,
     ) -> anyhow::Result<Self> {
         let clients = ClientRegistry::new(&config)?;
+        let revocations = Arc::new(RevocationStore::new(std::time::Duration::from_secs(
+            config.revocation.max_ttl_secs,
+        )));
         Ok(Self {
             config: Arc::new(config),
             clients: Arc::new(clients),
             key: Arc::new(key),
+            revocations,
             metrics,
             started: Instant::now(),
         })

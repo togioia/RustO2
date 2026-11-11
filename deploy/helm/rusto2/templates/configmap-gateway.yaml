@@ -1,0 +1,34 @@
+{{- if not .Values.gateway.config.routes }}
+{{- fail "gateway.config.routes must contain at least one route" }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rusto2.gateway.fullname" . }}
+  labels:
+    {{- include "rusto2.componentLabels" (dict "root" . "component" "gateway") | nindent 4 }}
+data:
+  rusto2.yaml: |
+    server:
+      listen: 0.0.0.0:8080
+{{- with omit .Values.gateway.config.server "listen" }}
+{{- toYaml . | nindent 6 }}
+{{- end }}
+    identity:
+      issuer: {{ include "rusto2.issuer" . | quote }}
+      audience: {{ .Values.identity.audience | quote }}
+      jwks_url: {{ include "rusto2.identity.jwksURL" . | quote }}
+      refresh_secs: {{ .Values.gateway.config.identity.refresh_secs }}
+      leeway_secs: {{ .Values.gateway.config.identity.leeway_secs }}
+      introspection_url: {{ default (printf "http://%s:%v/oauth2/introspect" (include "rusto2.identity.fullname" .) .Values.identity.service.port) .Values.gateway.config.identity.introspection_url | quote }}
+      introspection_client_id: {{ .Values.gateway.config.identity.introspection_client_id | quote }}
+      introspection_client_secret: "${RUSTO2_GATEWAY_SECRET}"
+      revocation_cache_secs: {{ .Values.gateway.config.identity.revocation_cache_secs }}
+      revocation_fail_open: {{ .Values.gateway.config.identity.revocation_fail_open }}
+    rate_limiting:
+      backend: {{ .Values.gateway.config.rate_limiting.backend | quote }}
+      redis_url: {{ .Values.gateway.config.rate_limiting.redis_url | quote }}
+      key_prefix: {{ .Values.gateway.config.rate_limiting.key_prefix | quote }}
+      fail_open: {{ .Values.gateway.config.rate_limiting.fail_open }}
+    routes:
+{{- toYaml .Values.gateway.config.routes | nindent 6 }}

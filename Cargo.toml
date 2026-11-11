@@ -5,9 +5,11 @@ members = [
     "crates/rusto2-is",
     "crates/rusto2-gw",
 ]
+# The cargo-fuzz harness needs nightly + libFuzzer; keep it out of normal builds.
+exclude = ["fuzz"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.88"
 license = "Apache-2.0"
@@ -16,6 +18,7 @@ authors = ["Tommaso Gioia"]
 
 [workspace.dependencies]
 anyhow = "1.0"
+async-trait = "0.1"
 axum = { version = "0.8.9", features = ["http2"] }
 base64 = "0.22"
 bytes = "1"
@@ -27,7 +30,9 @@ metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.16.2", default-features = false }
 mimalloc = { version = "0.1", default-features = false }
 pem = "3.0"
+proptest = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "stream", "json"] }
+redis = { version = "0.32", features = ["tokio-comp", "connection-manager", "script"] }
 ring = "0.17"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1", features = ["derive"] }

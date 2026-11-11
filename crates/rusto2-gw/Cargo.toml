@@ -16,6 +16,7 @@ path = "src/main.rs"
 rusto2-common = { path = "../rusto2-common" }
 
 anyhow.workspace = true
+async-trait.workspace = true
 axum.workspace = true
 bytes.workspace = true
 dashmap.workspace = true
@@ -25,10 +26,15 @@ jsonwebtoken.workspace = true
 metrics.workspace = true
 mimalloc.workspace = true
 metrics-exporter-prometheus.workspace = true
+redis.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

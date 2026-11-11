@@ -1,0 +1,276 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+# Pushing images is intentionally impossible from pull requests: this workflow
+# has no pull_request trigger.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+      major_minor: ${{ steps.meta.outputs.major_minor }}
+      short_sha: ${{ steps.meta.outputs.short_sha }}
+      owner: ${{ steps.meta.outputs.owner }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Compute release metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            echo "::error::release.yml must be dispatched from a v* tag ref (got ${GITHUB_REF_TYPE} ${GITHUB_REF_NAME})."
+            exit 1
+          fi
+
+          tag="${GITHUB_REF_NAME}"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::tag '${tag}' is not a release tag like v1.2.3 or v1.2.3-rc.1."
+            exit 1
+          fi
+
+          version="${tag#v}"
+          core="${version%%-*}"
+          major="${core%%.*}"
+          rest="${core#*.}"
+          minor="${rest%%.*}"
+          sha="$(git rev-parse HEAD)"
+          owner="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+
+          prerelease=false
+          case "$version" in
+            *-*) prerelease=true ;;
+          esac
+
+          {
+            echo "tag=${tag}"
+            echo "version=${version}"
+            echo "major_minor=${major}.${minor}"
+            echo "short_sha=${sha:0:12}"
+            echo "owner=${owner}"
+            echo "prerelease=${prerelease}"
+          } >> "$GITHUB_OUTPUT"
+
+  release:
+    name: Build, sign and publish
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      IMAGE_GW: ghcr.io/${{ needs.prepare.outputs.owner }}/rusto2-gw
+      IMAGE_IS: ghcr.io/${{ needs.prepare.outputs.owner }}/rusto2-is
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata for rusto2-gw
+        id: meta-gw
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE_GW }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ needs.prepare.outputs.prerelease == 'false' }}
+            type=sha,format=long,prefix=sha-
+            type=raw,value=latest,enable=${{ needs.prepare.outputs.prerelease == 'false' }}
+          labels: |
+            org.opencontainers.image.title=RustO2 Gateway
+            org.opencontainers.image.description=Streaming API gateway with JWT validation, rate limiting and circuit breaking
+            org.opencontainers.image.vendor=RustO2
+            org.opencontainers.image.licenses=Apache-2.0
+
+      - name: Docker metadata for rusto2-is
+        id: meta-is
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE_IS }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ needs.prepare.outputs.prerelease == 'false' }}
+            type=sha,format=long,prefix=sha-
+            type=raw,value=latest,enable=${{ needs.prepare.outputs.prerelease == 'false' }}
+          labels: |
+            org.opencontainers.image.title=RustO2 Identity Server
+            org.opencontainers.image.description=OAuth2 client_credentials token service with Ed25519 JWTs and JWKS
+            org.opencontainers.image.vendor=RustO2
+            org.opencontainers.image.licenses=Apache-2.0
+
+      - name: Build and push rusto2-gw
+        id: build-gw
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/gateway.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta-gw.outputs.tags }}
+          labels: ${{ steps.meta-gw.outputs.labels }}
+          # SLSA provenance and SBOMs are generated explicitly below so they
+          # are uploaded to the release and to the registry in one place.
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=rusto2-gw
+          cache-to: type=gha,mode=max,scope=rusto2-gw
+
+      - name: Build and push rusto2-is
+        id: build-is
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/identity.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta-is.outputs.tags }}
+          labels: ${{ steps.meta-is.outputs.labels }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=rusto2-is
+          cache-to: type=gha,mode=max,scope=rusto2-is
+
+      - name: Generate SPDX SBOM for rusto2-gw
+        uses: anchore/sbom-action@v0.24.3
+        with:
+          image: ${{ env.IMAGE_GW }}@${{ steps.build-gw.outputs.digest }}
+          format: spdx-json
+          output-file: rusto2-gw.spdx.json
+          syft-version: v1.57.1
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+          upload-artifact: false
+          upload-release-assets: false
+          dependency-snapshot: false
+
+      - name: Generate SPDX SBOM for rusto2-is
+        uses: anchore/sbom-action@v0.24.3
+        with:
+          image: ${{ env.IMAGE_IS }}@${{ steps.build-is.outputs.digest }}
+          format: spdx-json
+          output-file: rusto2-is.spdx.json
+          syft-version: v1.57.1
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+          upload-artifact: false
+          upload-release-assets: false
+          dependency-snapshot: false
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v3.1.4
+
+      - name: Sign image digests keyless
+        env:
+          DIGEST_GW: ${{ steps.build-gw.outputs.digest }}
+          DIGEST_IS: ${{ steps.build-is.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cosign sign --yes "${IMAGE_GW}@${DIGEST_GW}"
+          cosign sign --yes "${IMAGE_IS}@${DIGEST_IS}"
+
+      - name: Attest rusto2-gw build provenance
+        id: attest-gw
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE_GW }}
+          subject-digest: ${{ steps.build-gw.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest rusto2-is build provenance
+        id: attest-is
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE_IS }}
+          subject-digest: ${{ steps.build-is.outputs.digest }}
+          push-to-registry: true
+
+      - name: Collect attestation bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "${{ steps.attest-gw.outputs.bundle-path }}" rusto2-gw.provenance.jsonl
+          cp "${{ steps.attest-is.outputs.bundle-path }}" rusto2-is.provenance.jsonl
+
+      - name: Upload SBOM and provenance artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: rusto2-release-evidence
+          path: |
+            rusto2-gw.spdx.json
+            rusto2-is.spdx.json
+            rusto2-gw.provenance.jsonl
+            rusto2-is.provenance.jsonl
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Create the GitHub release if needed and attach evidence
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            args=(--verify-tag --title "$TAG" --generate-notes)
+            if [ "$PRERELEASE" = "true" ]; then
+              args+=(--prerelease)
+            fi
+            gh release create "$TAG" "${args[@]}"
+          fi
+          gh release upload "$TAG" \
+            rusto2-gw.spdx.json \
+            rusto2-is.spdx.json \
+            rusto2-gw.provenance.jsonl \
+            rusto2-is.provenance.jsonl \
+            --clobber
+
+      - name: Release summary
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+          DIGEST_GW: ${{ steps.build-gw.outputs.digest }}
+          DIGEST_IS: ${{ steps.build-is.outputs.digest }}
+        shell: bash
+        run: |
+          {
+            echo "### RustO2 ${TAG}"
+            echo
+            echo "| Image | Digest |"
+            echo "|---|---|"
+            echo "| \`${IMAGE_GW}\` | \`${DIGEST_GW}\` |"
+            echo "| \`${IMAGE_IS}\` | \`${DIGEST_IS}\` |"
+            echo
+            echo "SBOMs, cosign signatures and SLSA provenance were published with this release."
+          } >> "$GITHUB_STEP_SUMMARY"

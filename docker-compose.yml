@@ -12,6 +12,7 @@ services:
       RUSTO2_ISSUER: http://localhost:9000
       RUSTO2_DEMO_SECRET: ${RUSTO2_DEMO_SECRET:-demo-secret}
       RUSTO2_READONLY_SECRET: ${RUSTO2_READONLY_SECRET:-readonly-secret}
+      RUSTO2_GATEWAY_SECRET: ${RUSTO2_GATEWAY_SECRET:-gateway-secret}
       RUST_LOG: info,rusto2_is=debug
       MIMALLOC_PURGE_DELAY: "0"
       MIMALLOC_ARENA_EAGER_COMMIT: "0"
@@ -34,6 +35,11 @@ services:
       RUSTO2_CONFIG: /etc/rusto2/rusto2.yaml
       RUSTO2_JWKS_URL: http://rusto2-is:9000/.well-known/jwks.json
       RUSTO2_ISSUER: http://localhost:9000
+      RUSTO2_INTROSPECTION_URL: http://rusto2-is:9000/oauth2/introspect
+      RUSTO2_GATEWAY_CLIENT_ID: gateway-client
+      RUSTO2_GATEWAY_SECRET: ${RUSTO2_GATEWAY_SECRET:-gateway-secret}
+      RUSTO2_RATE_LIMIT_BACKEND: redis
+      RUSTO2_REDIS_URL: redis://redis:6379/0
       RUST_LOG: info,rusto2_gw=debug
       MIMALLOC_PURGE_DELAY: "0"
       MIMALLOC_ARENA_EAGER_COMMIT: "0"
@@ -42,10 +48,28 @@ services:
     ports:
       - "8080:8080"
     depends_on:
-      - rusto2-is
+      rusto2-is:
+        condition: service_started
+      redis:
+        condition: service_healthy
     read_only: true
     security_opt:
       - no-new-privileges:true
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    volumes:
+      - redis-data:/data
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 1s
+      retries: 20
     restart: unless-stopped
 
   httpbin:
@@ -67,6 +91,7 @@ services:
       - --web.enable-lifecycle
     volumes:
       - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus-data:/prometheus
     ports:
       - "9090:9090"
@@ -96,3 +121,4 @@ volumes:
   rusto2-keys:
   prometheus-data:
   grafana-data:
+  redis-data:

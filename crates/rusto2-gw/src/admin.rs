@@ -20,7 +20,11 @@ pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
             "keys": jwks.keys,
             "last_refresh_age_secs": jwks.last_refresh_age_secs,
         },
-        "rate_limit_buckets": state.limiter.len(),
+        "rate_limit": {
+            "backend": state.limiter.backend_name(),
+            "local_buckets": state.limiter.len(),
+        },
+        "revocation_cache_entries": state.revocations.as_ref().map(|cache| cache.len()).unwrap_or(0),
         "circuit_breakers": state.breakers.snapshot(),
     }))
 }

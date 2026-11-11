@@ -4,4 +4,5 @@ services:
   rusto2-gw:
     environment:
       RUSTO2_RATE_LIMIT_RPS: "0"
+      RUSTO2_RATE_LIMIT_BACKEND: memory
       RUST_LOG: warn

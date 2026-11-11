@@ -1,0 +1,74 @@
+Rusto2 {{ .Chart.Version }} installed in namespace {{ .Release.Namespace }}.
+
+Workloads
+  gateway   Service/{{ include "rusto2.gateway.fullname" . }}:{{ .Values.gateway.service.port }}   probes /healthz, /readyz
+  identity  Service/{{ include "rusto2.identity.fullname" . }}:{{ .Values.identity.service.port }}   probe  /healthz
+
+Public issuer:     {{ include "rusto2.issuer" . }}
+Internal JWKS URL: {{ include "rusto2.identity.jwksURL" . }}
+{{- if .Values.ingress.enabled }}
+
+Ingress hosts:
+{{- range .Values.ingress.hosts }}
+  http://{{ .host }}/
+{{- end }}
+{{- end }}
+
+Port-forward for local access
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "rusto2.identity.fullname" . }} 9000:{{ .Values.identity.service.port }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "rusto2.gateway.fullname" . }} 8080:{{ .Values.gateway.service.port }}
+
+Request a demo token
+  TOKEN=$(curl -s -X POST http://localhost:9000/oauth2/token \
+    -H 'Content-Type: application/x-www-form-urlencoded' \
+    -d 'grant_type=client_credentials' \
+    -d 'client_id=demo-client' \
+    -d "client_secret=${DEMO_SECRET}" \
+    -d 'scope=read write' | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+
+  curl -i -H "Authorization: Bearer ${TOKEN}" http://localhost:8080/api/get
+{{- if .Values.identity.existingSecret }}
+
+Client credentials
+  Client secrets come from the existing Secret "{{ .Values.identity.existingSecret }}".
+  It must contain every key referenced by identity.config.clients[].secretEnv.
+{{- else }}
+
+Client credentials (demo only)
+  The chart created Secret "{{ include "rusto2.identity.secretName" . }}" with demo
+  secrets. Read them with:
+    kubectl -n {{ .Release.Namespace }} get secret {{ include "rusto2.identity.secretName" . }} -o jsonpath='{.data.RUSTO2_DEMO_SECRET}' | base64 -d
+    kubectl -n {{ .Release.Namespace }} get secret {{ include "rusto2.identity.secretName" . }} -o jsonpath='{.data.RUSTO2_READONLY_SECRET}' | base64 -d
+  These credentials are for demos. Replace them (identity.existingSecret) before
+  exposing the identity server outside the cluster.
+{{- end }}
+{{- if .Values.identity.keys.existingSecret }}
+
+Signing key
+  Mounted read-only from Secret "{{ .Values.identity.keys.existingSecret }}" (key "{{ .Values.identity.keys.secretKey }}").
+  All identity replicas share this key, so its JWKS is stable across pods.
+{{- else if .Values.identity.persistence.enabled }}
+
+Signing key
+  Generated once on PVC "{{ include "rusto2.identity.pvcName" . }}" and reused across restarts.
+  The PVC is kept on uninstall (helm.sh/resource-policy: keep). Delete it manually to rotate keys.
+{{- else }}
+
+Signing key
+  No persistence configured: the Ed25519 key is regenerated on every restart,
+  invalidating previously issued tokens. Configure persistence or keys.existingSecret.
+{{- end }}
+{{- if and .Values.identity.autoscaling.enabled (not .Values.identity.keys.existingSecret) }}
+
+WARNING: identity.autoscaling is enabled with a PVC-backed key. Only a
+ReadWriteMany volume or a shared read-only Secret safely serves multiple
+replicas. ReadWriteOnce volumes are single-writer and cannot be attached by pods
+on different nodes. Prefer identity.keys.existingSecret for replicas.
+{{- end }}
+
+Security notes
+  - Both containers run as UID/GID 65532 with a read-only root filesystem.
+  - This chart does not terminate TLS. Put an Ingress/mesh in front and set
+    identity.issuer to the external issuer URL.
+  - Rate limits and circuit breakers are per gateway pod, not global.
+  - NetworkPolicy is {{ if .Values.networkPolicy.enabled }}enabled{{ else }}disabled{{ end }}; enable it for default-deny gateway/identity traffic.

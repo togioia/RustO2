@@ -1,0 +1,136 @@
+name: Benchmark
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: benchmark-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    # Benchmarks are noisy on shared runners and must never gate a release.
+    # The job is advisory: it publishes a markdown artifact even when a step
+    # fails.
+    name: Benchmark (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install oha 1.16.0 without sudo
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL -o "$HOME/.local/bin/oha" \
+            https://github.com/hatoo/oha/releases/download/v1.16.0/oha-linux-amd64
+          chmod +x "$HOME/.local/bin/oha"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/oha" --version
+
+      - name: Start the benchmark stack
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.bench.yml up -d --build
+
+      - name: Wait for readiness and obtain a token
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ready=false
+          for _ in $(seq 1 90); do
+            if curl -fsS -m 5 http://localhost:8080/readyz >/dev/null 2>&1; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" != "true" ]; then
+            echo "::error::gateway did not become ready at http://localhost:8080/readyz"
+            docker compose -f docker-compose.yml -f docker-compose.bench.yml ps || true
+            exit 1
+          fi
+
+          token=""
+          for _ in $(seq 1 60); do
+            token="$(curl -fsS -m 10 -X POST http://localhost:9000/oauth2/token \
+              -H "Content-Type: application/x-www-form-urlencoded" \
+              --data-urlencode "grant_type=client_credentials" \
+              --data-urlencode "client_id=demo-client" \
+              --data-urlencode "client_secret=demo-secret" \
+              --data-urlencode "scope=read write" \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])' \
+              2>/dev/null || true)"
+            if [ -n "$token" ]; then
+              break
+            fi
+            sleep 2
+          done
+          if [ -z "$token" ]; then
+            echo "::error::could not obtain a token from http://localhost:9000/oauth2/token"
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          curl -fsS -m 10 -o /dev/null -H "Authorization: Bearer $token" \
+            "http://localhost:8080/api/get?probe=benchmark"
+          echo "Readiness and token checks passed."
+
+      - name: Run scripts/bench.sh
+        shell: bash
+        run: |
+          # GitHub runs bash with -e; disable it so a failing benchmark still
+          # produces a complete markdown report (the step still fails below).
+          set +e
+          set -o pipefail
+          {
+            echo "# RustO2 benchmark"
+            echo
+            echo "- Ref: \`${GITHUB_REF_NAME}\`"
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "- Load: oha 1.16.0, DURATION=15s, CONNECTIONS=128"
+            echo
+            echo '```text'
+            DURATION=15s CONNECTIONS=128 bash scripts/bench.sh 2>&1
+            rc=$?
+            echo '```'
+            echo
+            echo "scripts/bench.sh exit code: ${rc}"
+            exit "$rc"
+          } | tee benchmark.md
+
+      - name: Capture compose logs on failure
+        if: failure()
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.bench.yml logs --no-color --tail=500 \
+            > compose-logs.txt 2>&1 || true
+
+      - name: Upload benchmark report
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: benchmark-${{ github.run_id }}
+          path: benchmark.md
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload compose logs
+        uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: benchmark-logs-${{ github.run_id }}
+          path: compose-logs.txt
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Stop the benchmark stack
+        if: always()
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.bench.yml down -v --remove-orphans || true

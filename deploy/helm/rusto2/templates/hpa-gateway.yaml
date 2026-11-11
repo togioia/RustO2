@@ -1,0 +1,29 @@
+{{- if .Values.gateway.autoscaling.enabled }}
+{{- if lt (int .Values.gateway.autoscaling.maxReplicas) (int .Values.gateway.autoscaling.minReplicas) }}
+{{- fail "gateway.autoscaling.maxReplicas must be greater than or equal to minReplicas" }}
+{{- end }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "rusto2.gateway.fullname" . }}
+  labels:
+    {{- include "rusto2.componentLabels" (dict "root" . "component" "gateway") | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "rusto2.gateway.fullname" . }}
+  minReplicas: {{ .Values.gateway.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.gateway.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.gateway.autoscaling.targetCPUUtilizationPercentage }}
+  {{- with .Values.gateway.autoscaling.behavior }}
+  behavior:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

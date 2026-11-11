@@ -9,6 +9,8 @@ pub struct Config {
     pub server: ServerConfig,
     pub token: TokenConfig,
     pub keys: KeysConfig,
+    #[serde(default)]
+    pub revocation: RevocationConfig,
     pub clients: Vec<ClientConfig>,
 }
 
@@ -40,6 +42,26 @@ pub struct TokenConfig {
 
 fn default_ttl() -> u64 {
     3_600
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RevocationConfig {
+    /// Upper bound for a revocation entry's lifetime. Entries normally expire
+    /// with the token's `exp` claim.
+    #[serde(default = "default_revocation_ttl")]
+    pub max_ttl_secs: u64,
+}
+
+impl Default for RevocationConfig {
+    fn default() -> Self {
+        Self {
+            max_ttl_secs: default_revocation_ttl(),
+        }
+    }
+}
+
+fn default_revocation_ttl() -> u64 {
+    86_400
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -96,6 +118,9 @@ impl Config {
         }
         if self.token.ttl_secs == 0 {
             bail!("token.ttl_secs must be greater than zero");
+        }
+        if self.revocation.max_ttl_secs == 0 {
+            bail!("revocation.max_ttl_secs must be greater than zero");
         }
         if self.clients.is_empty() {
             bail!("at least one client must be configured");

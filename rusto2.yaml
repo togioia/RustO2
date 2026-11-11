@@ -12,6 +12,19 @@ identity:
   jwks_url: http://localhost:9000/.well-known/jwks.json
   refresh_secs: 300
   leeway_secs: 15
+  introspection_url: http://localhost:9000/oauth2/introspect
+  introspection_client_id: gateway-client
+  introspection_client_secret: ${RUSTO2_GATEWAY_SECRET:-gateway-secret}
+  revocation_cache_secs: 5
+  revocation_fail_open: true
+
+# Switch to redis in compose/Kubernetes to share quotas across gateway replicas.
+# If Redis is unavailable, fail_open=true lets traffic through instead of 503.
+rate_limiting:
+  backend: memory
+  redis_url: redis://127.0.0.1:6379/0
+  key_prefix: "rusto2:ratelimit:"
+  fail_open: true
 
 routes:
   # Protected route: JWT required, "read" scope, per-client token bucket and
@@ -54,6 +67,7 @@ routes:
     auth:
       mode: jwt
       scopes: [write]
+      revocation_check: true
     rate_limit:
       rps: 30
       burst: 60

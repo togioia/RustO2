@@ -1,0 +1,70 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "rusto2.gateway.fullname" . }}
+  labels:
+    {{- include "rusto2.componentLabels" (dict "root" . "component" "gateway") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "rusto2.componentSelectorLabels" (dict "root" . "component" "gateway") | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    {{- if .Values.networkPolicy.gateway.ingress.from }}
+    - from:
+        {{- toYaml .Values.networkPolicy.gateway.ingress.from | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 8080
+    {{- else }}
+    - ports:
+        - protocol: TCP
+          port: 8080
+    {{- end }}
+    - from:
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.monitoring.namespaceSelector | nindent 12 }}
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "rusto2.componentSelectorLabels" (dict "root" . "component" "identity") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 9000
+    {{- $backend := .Values.networkPolicy.gateway.egress.backend }}
+    {{- if $backend.allowAllNamespaces }}
+    - to:
+        - namespaceSelector: {}
+      ports:
+        {{- range $backend.ports }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+    {{- end }}
+    {{- range $backend.cidrs }}
+    - to:
+        - ipBlock:
+            cidr: {{ . | quote }}
+      ports:
+        {{- range $backend.ports }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+    {{- end }}
+{{- end }}

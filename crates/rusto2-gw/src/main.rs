@@ -6,6 +6,7 @@ mod jwks;
 mod observability;
 mod proxy;
 mod rate_limit;
+mod revocation;
 mod routes;
 mod security;
 mod state;
@@ -27,7 +28,7 @@ async fn main() -> anyhow::Result<()> {
     let config_path = std::env::var("RUSTO2_CONFIG").unwrap_or_else(|_| "rusto2.yaml".to_owned());
     let config = config::GatewayConfig::load(&config_path)?;
     let metrics = rusto2_common::install_metrics()?;
-    let state = state::AppState::build(config, metrics)?;
+    let state = state::AppState::build(config, metrics).await?;
     let listen = state.config.server.listen.clone();
     let routes = state.routes.len();
     let issuer = state.config.identity.issuer.clone();
@@ -51,12 +52,16 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(Arc::clone(&state.jwks).run());
 
     let limiter = Arc::clone(&state.limiter);
+    let revocations = state.revocations.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         interval.tick().await;
         loop {
             interval.tick().await;
             limiter.cleanup(Duration::from_secs(300));
+            if let Some(cache) = &revocations {
+                cache.cleanup();
+            }
         }
     });
 

@@ -1,0 +1,526 @@
+# Default values for the RustO2 Helm chart.
+#
+# The chart deploys two workloads:
+#   - gateway  (rusto2-gw): JWT validation, routing, rate limiting, metrics (:8080)
+#   - identity (rusto2-is): OAuth2 client_credentials, Ed25519 signing, JWKS (:9000)
+#
+# Resource names default to "<release>-<chart>", so installing a release named
+# "rusto2" produces the Services "rusto2-gw" and "rusto2-is". The gateway
+# ConfigMap points its internal JWKS URL at "http://rusto2-is:9000".
+#
+# The defaults are demo-friendly but production-shaped. Review every value
+# marked "demo" before exposing the chart outside a cluster.
+
+# -- Override the chart name used in resource names.
+nameOverride: ""
+
+# -- Override the full resource prefix. When empty, names are
+# "<release>-<chart>", or just "<release>" when the release name already
+# contains the chart name.
+fullnameOverride: ""
+
+# -- Extra labels added to every resource.
+commonLabels: {}
+
+# -- Pull secrets for private registries, for example:
+# imagePullSecrets:
+#   - name: regcred
+imagePullSecrets: []
+
+serviceAccount:
+  # -- Create a dedicated ServiceAccount shared by both workloads.
+  create: true
+  # -- ServiceAccount name. Defaults to the full release name.
+  name: ""
+  # -- Annotations, for example for cloud workload identity.
+  annotations: {}
+  # -- Mount a service account token. RustO2 does not call the Kubernetes API.
+  automount: false
+
+# -- Pod-level security context shared by both workloads. UID/GID 65532 match
+# the distroless "nonroot" user used by the Dockerfiles.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+# -- Container-level security context shared by both workloads. The only
+# writable path in either container is /data (identity signing key).
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# ---------------------------------------------------------------------------
+# Identity server (rusto2-is)
+# ---------------------------------------------------------------------------
+identity:
+  # -- Replicas. Keep at 1 unless the signing key is shared through
+  # "keys.existingSecret"; key generation is a single-writer operation.
+  replicaCount: 1
+
+  image:
+    # -- Container image repository.
+    repository: rusto2-is
+    # -- Image tag. An empty tag falls back to .Chart.AppVersion.
+    tag: dev
+    # -- Image digest such as "sha256:...". Takes precedence over tag when set.
+    digest: ""
+    # -- Image pull policy.
+    pullPolicy: IfNotPresent
+
+  # -- tracing filter for the identity server, e.g. "info,rusto2_is=debug".
+  logLevel: info
+
+  # -- Public issuer written into tokens and expected by the gateway. Empty
+  # defaults to the in-cluster identity Service URL, http://<prefix>-is:9000.
+  # Set this to the external HTTPS URL when exposing the identity server
+  # through an Ingress, so discovery and token "iss" values stay consistent.
+  issuer: ""
+
+  # -- JWT audience shared by the identity server and the gateway.
+  audience: rusto2
+
+  config:
+    token:
+      # -- Access token lifetime in seconds.
+      ttl_secs: 3600
+    # -- Upper bound for jti revocation entries.
+    revocation:
+      max_ttl_secs: 86400
+    # -- OAuth2 clients rendered into rusto2-is.yaml. "secretEnv" names the
+    # environment variable whose value is injected from the chart Secret (or
+    # from identity.existingSecret).
+    clients:
+      - client_id: demo-client
+        secretEnv: RUSTO2_DEMO_SECRET
+        scopes: [read, write, admin]
+        enabled: true
+      - client_id: readonly-client
+        secretEnv: RUSTO2_READONLY_SECRET
+        scopes: [read]
+        enabled: true
+      - client_id: gateway-client
+        secretEnv: RUSTO2_GATEWAY_SECRET
+        scopes: [introspect]
+        enabled: true
+
+  secrets:
+    # -- Demo client secret. Empty generates a random value on first install
+    # and preserves it on upgrade; a non-empty value wins and rotates it.
+    # Never commit a real secret here.
+    demoClientSecret: ""
+    # -- Demo read-only client secret, same behavior as demoClientSecret.
+    readonlyClientSecret: ""
+    # -- Gateway introspection client secret.
+    gatewayClientSecret: ""
+    # -- Extra keys added verbatim to the chart-managed Secret. Values are
+    # base64 encoded by the template. Prefer identity.existingSecret in
+    # production.
+    extra: {}
+
+  # -- Use an existing Secret for client credentials instead of creating one.
+  # It must contain every key referenced by config.clients[].secretEnv
+  # (default: RUSTO2_DEMO_SECRET, RUSTO2_READONLY_SECRET and
+  # RUSTO2_GATEWAY_SECRET).
+  existingSecret: ""
+
+  keys:
+    # -- Use an existing Secret containing a PKCS#8 Ed25519 PEM. This is the
+    # recommended way to share one signing key across replicas: every replica
+    # reads the same read-only key and no writer is needed.
+    existingSecret: ""
+    # -- Key inside keys.existingSecret that contains the PEM.
+    secretKey: ed25519.pem
+    # -- Generate /data/ed25519.pem when missing. Forced to false when
+    # keys.existingSecret is set so a bad mount fails loudly instead of trying
+    # to write into a read-only Secret volume.
+    generateIfMissing: true
+
+  persistence:
+    # -- Persist the generated Ed25519 key on a PVC. Required for stable token
+    # validation across restarts unless keys.existingSecret is used.
+    enabled: true
+    # -- Mount an existing PVC instead of creating one. Setting this implies
+    # persistence even when enabled is false. The claim must contain (or allow
+    # writing) ed25519.pem at its root.
+    existingClaim: ""
+    # -- Storage class. Empty uses the cluster default.
+    storageClass: ""
+    # -- Requested size for the keys volume. 1Gi is compatible with common
+    # CSI volume minimums; the key itself is only a few hundred bytes.
+    size: 1Gi
+    # -- Access modes for the chart-managed PVC. ReadWriteOnce is correct for
+    # a single writer. ReadWriteMany is only appropriate when the storage
+    # class supports it and the single-writer caveat is understood.
+    accessModes:
+      - ReadWriteOnce
+    # -- Keep the PVC when the release is uninstalled, so the signing key is
+    # not silently destroyed. Delete it manually when rotating keys.
+    keep: true
+    # -- Extra annotations for the PVC.
+    annotations: {}
+    # -- Extra labels for the PVC.
+    labels: {}
+
+  service:
+    # -- Service type. RustO2 speaks plain HTTP; terminate TLS in front.
+    type: ClusterIP
+    # -- Service port. The container always listens on 9000.
+    port: 9000
+    # -- Extra Service annotations.
+    annotations: {}
+    # -- Extra Service labels.
+    labels: {}
+
+  # -- Resource requests and limits. The identity server uses roughly 4 MiB
+  # of RSS at idle.
+  resources:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+  probes:
+    startup:
+      # -- A startup probe avoids killing a process that is generating its key
+      # or loading a slow volume.
+      enabled: true
+      path: /healthz
+      periodSeconds: 2
+      timeoutSeconds: 2
+      failureThreshold: 30
+    liveness:
+      path: /healthz
+      periodSeconds: 10
+      timeoutSeconds: 2
+      failureThreshold: 3
+    readiness:
+      # -- The identity server exposes one /healthz endpoint and becomes ready
+      # as soon as the key is loaded and the listener is bound.
+      path: /healthz
+      periodSeconds: 5
+      timeoutSeconds: 2
+      failureThreshold: 3
+      successThreshold: 1
+
+  autoscaling:
+    # -- Enable a CPU HPA for the identity server. Only valid when key
+    # persistence or a shared key Secret is configured. Disabled by default
+    # because key generation is single-writer.
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 75
+    # -- Optional HPA behavior block, passed through verbatim.
+    behavior: {}
+
+  podDisruptionBudget:
+    # -- Create a PodDisruptionBudget for the identity server.
+    enabled: true
+    # -- Set exactly one of minAvailable / maxUnavailable.
+    minAvailable: null
+    # -- With one replica, maxUnavailable lets a node drain proceed instead of
+    # blocking it forever.
+    maxUnavailable: 1
+
+  # -- Deployment strategy. Empty picks Recreate for a PVC-backed key and
+  # RollingUpdate for a Secret-backed key.
+  updateStrategy: {}
+
+  # -- Topology spread constraints, for example to spread replicas across
+  # nodes. Empty by default.
+  topologySpreadConstraints: []
+  # -- Affinity rules, passed through verbatim.
+  affinity: {}
+  # -- Node selector.
+  nodeSelector: {}
+  # -- Tolerations.
+  tolerations: []
+  # -- Priority class name.
+  priorityClassName: ""
+  # -- Extra pod annotations.
+  podAnnotations: {}
+  # -- Extra pod labels.
+  podLabels: {}
+  # -- Extra environment variables.
+  extraEnv: []
+  # -- Extra environment sources.
+  extraEnvFrom: []
+  # -- Extra volumes.
+  extraVolumes: []
+  # -- Extra volume mounts.
+  extraVolumeMounts: []
+  # -- Grace period for in-flight requests.
+  terminationGracePeriodSeconds: 30
+
+# ---------------------------------------------------------------------------
+# Gateway (rusto2-gw)
+# ---------------------------------------------------------------------------
+gateway:
+  # -- Replicas used when autoscaling is disabled. Ignored while the HPA is on.
+  replicaCount: 2
+
+  image:
+    # -- Container image repository.
+    repository: rusto2-gw
+    # -- Image tag. An empty tag falls back to .Chart.AppVersion.
+    tag: dev
+    # -- Image digest such as "sha256:...". Takes precedence over tag when set.
+    digest: ""
+    # -- Image pull policy.
+    pullPolicy: IfNotPresent
+
+  # -- tracing filter for the gateway, e.g. "info,rusto2_gw=debug".
+  logLevel: info
+
+  config:
+    # Server tuning. The listen address is fixed at 0.0.0.0:8080 in the
+    # ConfigMap so it always matches the container port and probe target.
+    server:
+      # -- Trust X-Forwarded-For. Enable only behind an Ingress or proxy that
+      # overwrites the header; otherwise clients can spoof their source IP.
+      trust_proxy: false
+      request_timeout_secs: 30
+      connect_timeout_secs: 5
+      pool_idle_timeout_secs: 90
+      pool_max_idle_per_host: 256
+    identity:
+      # -- How often the gateway refreshes cached JWKS keys.
+      refresh_secs: 300
+      # -- Clock skew allowed when validating exp/nbf/iat.
+      leeway_secs: 15
+      # -- RFC 7662 endpoint. Leave empty to derive it from the identity
+      # Service; revocation_check routes require it.
+      introspection_url: ""
+      # -- Client used by the gateway for introspection.
+      introspection_client_id: gateway-client
+      # -- Seconds to cache introspection results.
+      revocation_cache_secs: 5
+      # -- Allow traffic if the identity server cannot be reached.
+      revocation_fail_open: true
+    # -- Quota backend. The chart does not deploy Redis; set backend=redis and
+    # point redis_url at an external Redis when the gateway has more than one
+    # replica and quotas must be shared.
+    rate_limiting:
+      backend: memory
+      redis_url: redis://redis:6379/0
+      key_prefix: "rusto2:ratelimit:"
+      fail_open: true
+    # -- Routes rendered verbatim into rusto2.yaml. "upstream" must be
+    # reachable from the gateway pod. The defaults mirror the Compose demo and
+    # expect a Service named "httpbin" on port 8080 in this namespace. Replace
+    # them with your own backends.
+    routes:
+      - name: httpbin
+        prefix: /api
+        upstream: http://httpbin:8080
+        strip_prefix: true
+        methods: [GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS]
+        auth:
+          mode: jwt
+          scopes: [read]
+        rate_limit:
+          rps: 100
+          burst: 200
+          key: client
+        circuit_breaker:
+          failure_threshold: 5
+          recovery_secs: 10
+      - name: public
+        prefix: /public
+        upstream: http://httpbin:8080
+        strip_prefix: true
+        methods: [GET]
+        auth:
+          mode: none
+        rate_limit:
+          rps: 10
+          burst: 10
+          key: ip
+      - name: admin
+        prefix: /admin
+        upstream: http://httpbin:8080
+        strip_prefix: true
+        methods: [GET]
+        auth:
+          mode: jwt
+          scopes: [write]
+          revocation_check: true
+        rate_limit:
+          rps: 30
+          burst: 60
+          key: client
+
+  service:
+    # -- Service type. The gateway is normally exposed through an Ingress.
+    type: ClusterIP
+    # -- Service port. The container always listens on 8080.
+    port: 8080
+    # -- Extra Service annotations.
+    annotations: {}
+    # -- Extra Service labels.
+    labels: {}
+
+  # -- Resource requests and limits. The gateway idles around 5 MiB and stays
+  # below ~20 MiB under benchmark load.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+  probes:
+    startup:
+      # -- Give the gateway time to perform its first JWKS fetch (5 s timeout
+      # in the process) before liveness checks start counting.
+      enabled: true
+      path: /healthz
+      periodSeconds: 2
+      timeoutSeconds: 2
+      failureThreshold: 30
+    liveness:
+      path: /healthz
+      periodSeconds: 10
+      timeoutSeconds: 2
+      failureThreshold: 3
+    readiness:
+      # -- /readyz returns 503 until the JWKS has been loaded, so a gateway
+      # replica does not receive traffic before it can verify tokens.
+      path: /readyz
+      periodSeconds: 5
+      timeoutSeconds: 2
+      failureThreshold: 3
+      successThreshold: 2
+
+  autoscaling:
+    # -- Enable a CPU HPA for the gateway.
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    # -- Optional HPA behavior block, passed through verbatim.
+    behavior: {}
+
+  podDisruptionBudget:
+    # -- Create a PodDisruptionBudget for the gateway.
+    enabled: true
+    # -- Set exactly one of minAvailable / maxUnavailable.
+    minAvailable: 1
+    maxUnavailable: null
+
+  # -- Topology spread constraints for the gateway. Example:
+  # topologySpreadConstraints:
+  #   - maxSkew: 1
+  #     topologyKey: topology.kubernetes.io/zone
+  #     whenUnsatisfiable: ScheduleAnyway
+  #     labelSelector:
+  #       matchLabels:
+  #         app.kubernetes.io/name: rusto2
+  #         app.kubernetes.io/component: gateway
+  topologySpreadConstraints: []
+  # -- Affinity rules, passed through verbatim.
+  affinity: {}
+  # -- Node selector.
+  nodeSelector: {}
+  # -- Tolerations.
+  tolerations: []
+  # -- Priority class name.
+  priorityClassName: ""
+  # -- Extra pod annotations.
+  podAnnotations: {}
+  # -- Extra pod labels.
+  podLabels: {}
+  # -- Extra environment variables.
+  extraEnv: []
+  # -- Extra environment sources.
+  extraEnvFrom: []
+  # -- Extra volumes.
+  extraVolumes: []
+  # -- Extra volume mounts.
+  extraVolumeMounts: []
+  # -- Grace period for in-flight requests.
+  terminationGracePeriodSeconds: 30
+
+# ---------------------------------------------------------------------------
+# Gateway Ingress (optional)
+# ---------------------------------------------------------------------------
+ingress:
+  # -- Create an Ingress for the gateway Service.
+  enabled: false
+  # -- Ingress class name, for example "nginx" or "traefik".
+  className: ""
+  # -- Ingress annotations, for example cert-manager or proxy body size.
+  annotations: {}
+  hosts:
+    - host: rusto2.local
+      paths:
+        - path: /
+          pathType: Prefix
+  # -- TLS configuration, passed through verbatim. Example:
+  # tls:
+  #   - secretName: rusto2-gateway-tls
+  #     hosts:
+  #       - gateway.example.com
+  tls: []
+
+# ---------------------------------------------------------------------------
+# Monitoring (Prometheus Operator)
+# ---------------------------------------------------------------------------
+serviceMonitor:
+  # -- Create a ServiceMonitor that scrapes /metrics from both Services.
+  # Requires the monitoring.coreos.com/v1 CRDs (Prometheus Operator).
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  # -- Extra labels used by your Prometheus serviceMonitorSelector.
+  labels: {}
+  # -- Extra annotations.
+  annotations: {}
+  # -- Metric relabelings, passed through verbatim.
+  metricRelabelings: []
+  # -- Relabelings, passed through verbatim.
+  relabelings: []
+
+# ---------------------------------------------------------------------------
+# NetworkPolicies (optional)
+# ---------------------------------------------------------------------------
+networkPolicy:
+  # -- NetworkPolicies are disabled by default so the chart works on any CNI.
+  # Enable them on CNIs that enforce NetworkPolicy (Calico, Cilium, ...).
+  enabled: false
+  monitoring:
+    # -- Namespace selector allowed to scrape /metrics from both workloads.
+    # Adjust if Prometheus runs outside the "monitoring" namespace.
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: monitoring
+  gateway:
+    ingress:
+      # -- Sources allowed to reach the gateway HTTP port. An empty list means
+      # any source, which suits a public data plane. Restrict this to the
+      # ingress controller namespace when the gateway is not public.
+      from: []
+    egress:
+      backend:
+        # -- Allow all pods in all namespaces as upstreams. Set to false and
+        # use cidrs in locked-down clusters.
+        allowAllNamespaces: true
+        # -- Additional external CIDRs allowed as upstreams.
+        cidrs: []
+        # -- Destination ports allowed for backend traffic.
+        ports: [8080, 443]
+  identity:
+    # -- Extra ingress rules appended to the identity policy. The gateway and
+    # monitoring namespace are always allowed.
+    extraIngress: []

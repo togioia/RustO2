@@ -18,7 +18,9 @@ shared the same 8-vCPU WSL2 host.
 | Load generator | `oha 1.16.0` |
 | Protocol | HTTP/1.1 keep-alive |
 
-The gateway was started with rate limiting disabled for throughput runs:
+The gateway was started with rate limiting disabled for throughput runs. The
+default Compose stack uses Redis for distributed quotas; the benchmark overlay
+pins the in-memory backend to isolate the proxy.
 
 ```bash
 RUSTO2_RATE_LIMIT_RPS=0 RUST_LOG=warn \
@@ -62,7 +64,9 @@ Requests/sec: 30964.6939
 ```
 
 The baseline p99 is inflated by CPU contention on the shared host; the p50 is
-the more useful comparison for the proxy overhead.
+the more useful comparison for the proxy overhead. Repeated runs of the gateway
+benchmark ranged from about 8.9k to 12.9k req/s on this WSL2 host, so treat the
+absolute throughput as indicative.
 
 ## Rate limiting active: 100 rps/client, 64 connections, 8 seconds
 
@@ -93,18 +97,18 @@ rate is `rps`.
 `ps -o rss` after the throughput run:
 
 ```text
-rusto2-gw   18,396 KiB
-rusto2-is    4,024 KiB
-go-httpbin  19,756 KiB
+rusto2-gw   18,296 KiB
+rusto2-is    4,284 KiB
+go-httpbin  19,232 KiB
 ```
 
-Idle RSS before the run: gateway 5,380 KiB, identity 3,888 KiB.
+Idle RSS before the run: gateway 5,472 KiB, identity 4,216 KiB.
 
 ## Image size
 
 ```text
-rusto2-gw:dev   8.27 MB
-rusto2-is:dev   6.10 MB
+rusto2-gw:dev   8.75 MB
+rusto2-is:dev   6.32 MB
 ```
 
 Both images are based on `gcr.io/distroless/static-debian12:nonroot` and contain

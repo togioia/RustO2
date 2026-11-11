@@ -1,0 +1,24 @@
+{{- if .Values.identity.podDisruptionBudget.enabled }}
+{{- if and .Values.identity.podDisruptionBudget.minAvailable .Values.identity.podDisruptionBudget.maxUnavailable }}
+{{- fail "set only one of identity.podDisruptionBudget.minAvailable and maxUnavailable" }}
+{{- end }}
+{{- if and (not .Values.identity.podDisruptionBudget.minAvailable) (not .Values.identity.podDisruptionBudget.maxUnavailable) }}
+{{- fail "identity.podDisruptionBudget requires minAvailable or maxUnavailable" }}
+{{- end }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "rusto2.identity.fullname" . }}
+  labels:
+    {{- include "rusto2.componentLabels" (dict "root" . "component" "identity") | nindent 4 }}
+spec:
+  {{- with .Values.identity.podDisruptionBudget.minAvailable }}
+  minAvailable: {{ . }}
+  {{- end }}
+  {{- with .Values.identity.podDisruptionBudget.maxUnavailable }}
+  maxUnavailable: {{ . }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "rusto2.componentSelectorLabels" (dict "root" . "component" "identity") | nindent 6 }}
+{{- end }}

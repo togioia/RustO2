@@ -58,7 +58,6 @@ pub async fn proxy_handler(
     let method = request.method().clone();
     let uri = request.uri().clone();
     let headers = request.headers().clone();
-    let body = request.into_body();
 
     let client_ip = client_ip(&headers, peer, state.config.server.trust_proxy);
 
@@ -70,33 +69,66 @@ pub async fn proxy_handler(
                 .unwrap_or_else(|| client_ip.to_string()),
             crate::config::RateLimitKey::Ip => client_ip.to_string(),
         };
-        let decision = state.limiter.check(
-            format!("{}:{}", route.cfg.name, key),
-            policy.rps,
-            policy.effective_burst(),
-        );
+        let limiter_key = format!("{}:{}", route.cfg.name, key);
 
-        if !decision.allowed {
-            metrics::counter!(
-                "rusto2.rate.limited.total",
-                "route" => route.cfg.name.clone()
-            )
-            .increment(1);
-            tracing::debug!(
-                route = %route.cfg.name,
-                client = %key,
-                "request blocked by rate limiter"
-            );
+        match state
+            .limiter
+            .check(&limiter_key, policy.rps, policy.effective_burst())
+            .await
+        {
+            Ok(decision) => {
+                if !decision.allowed {
+                    metrics::counter!(
+                        "rusto2.rate.limited.total",
+                        "route" => route.cfg.name.clone()
+                    )
+                    .increment(1);
+                    tracing::debug!(
+                        route = %route.cfg.name,
+                        client = %key,
+                        "request blocked by rate limiter"
+                    );
 
-            let mut response = json_error(
-                StatusCode::TOO_MANY_REQUESTS,
-                "rate_limited",
-                "request rate limit exceeded for this client",
-            );
-            apply_rate_headers(&mut response, &decision, true);
-            return response;
+                    let mut response = json_error(
+                        StatusCode::TOO_MANY_REQUESTS,
+                        "rate_limited",
+                        "request rate limit exceeded for this client",
+                    );
+                    apply_rate_headers(&mut response, &decision, true);
+                    return response;
+                }
+                Some(decision)
+            }
+            Err(error) => {
+                metrics::counter!(
+                    "rusto2.rate_limit.errors.total",
+                    "route" => route.cfg.name.clone(),
+                    "backend" => state.limiter.backend_name()
+                )
+                .increment(1);
+                tracing::warn!(
+                    route = %route.cfg.name,
+                    backend = state.limiter.backend_name(),
+                    error = %error,
+                    fail_open = state.config.rate_limiting.fail_open,
+                    "rate limiter backend failed"
+                );
+
+                if state.config.rate_limiting.fail_open {
+                    None
+                } else {
+                    let mut response = json_error(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "rate_limiter_unavailable",
+                        "the rate limit backend is unavailable",
+                    );
+                    response
+                        .headers_mut()
+                        .insert(RETRY_AFTER, HeaderValue::from_static("1"));
+                    return response;
+                }
+            }
         }
-        Some(decision)
     } else {
         None
     };
@@ -162,7 +194,9 @@ pub async fn proxy_handler(
         .client
         .request(method.clone(), &upstream_url)
         .headers(outbound)
-        .body(reqwest::Body::wrap_stream(body.into_data_stream()))
+        .body(reqwest::Body::wrap_stream(
+            request.into_body().into_data_stream(),
+        ))
         .send()
         .await;
 
@@ -408,7 +442,13 @@ mod tests {
                 jwks_url: "http://issuer/jwks".into(),
                 refresh_secs: 300,
                 leeway_secs: 15,
+                introspection_url: None,
+                introspection_client_id: None,
+                introspection_client_secret: None,
+                revocation_cache_secs: 5,
+                revocation_fail_open: true,
             },
+            rate_limiting: Default::default(),
             routes: vec![crate::config::RouteConfig {
                 name: "api".into(),
                 prefix: "/api".into(),

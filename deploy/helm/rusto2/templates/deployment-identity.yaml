@@ -1,0 +1,181 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rusto2.identity.fullname" . }}
+  labels:
+    {{- include "rusto2.componentLabels" (dict "root" . "component" "identity") | nindent 4 }}
+spec:
+  {{- if not .Values.identity.autoscaling.enabled }}
+  replicas: {{ .Values.identity.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      {{- include "rusto2.componentSelectorLabels" (dict "root" . "component" "identity") | nindent 6 }}
+  {{- if .Values.identity.updateStrategy }}
+  strategy:
+    {{- toYaml .Values.identity.updateStrategy | nindent 4 }}
+  {{- else if and .Values.identity.persistence.enabled (not .Values.identity.keys.existingSecret) }}
+  # A PVC-backed signing key has a single writer. Recreate guarantees the old
+  # pod stops before a new pod tries to generate or lock the key file.
+  strategy:
+    type: Recreate
+  {{- else }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  {{- end }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap-identity.yaml") . | sha256sum }}
+        {{- if not .Values.identity.existingSecret }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret-identity.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.identity.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "rusto2.componentLabels" (dict "root" . "component" "identity") | nindent 8 }}
+        {{- with .Values.identity.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "rusto2.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automount }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.identity.terminationGracePeriodSeconds }}
+      enableServiceLinks: false
+      {{- with .Values.identity.priorityClassName }}
+      priorityClassName: {{ . | quote }}
+      {{- end }}
+      {{- with .Values.identity.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.identity.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.identity.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.identity.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: identity
+          image: {{ include "rusto2.image" (dict "root" . "image" .Values.identity.image) | quote }}
+          imagePullPolicy: {{ .Values.identity.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 9000
+              protocol: TCP
+          env:
+            - name: RUSTO2_CONFIG
+              value: /etc/rusto2/rusto2-is.yaml
+            - name: RUSTO2_KEY_PATH
+              value: /data/ed25519.pem
+            - name: RUSTO2_ISSUER
+              value: {{ include "rusto2.issuer" . | quote }}
+            - name: RUSTO2_AUDIENCE
+              value: {{ .Values.identity.audience | quote }}
+            - name: RUST_LOG
+              value: {{ .Values.identity.logLevel | quote }}
+            - name: MIMALLOC_PURGE_DELAY
+              value: "0"
+            - name: MIMALLOC_ARENA_EAGER_COMMIT
+              value: "0"
+            {{- $seen := dict }}
+            {{- range .Values.identity.config.clients }}
+            {{- if and .secretEnv (not (hasKey $seen .secretEnv)) }}
+            {{- $_ := set $seen .secretEnv true }}
+            - name: {{ .secretEnv }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "rusto2.identity.secretName" $ }}
+                  key: {{ .secretEnv }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.identity.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.identity.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.identity.probes.startup.enabled }}
+          startupProbe:
+            httpGet:
+              path: {{ .Values.identity.probes.startup.path | quote }}
+              port: http
+            periodSeconds: {{ .Values.identity.probes.startup.periodSeconds }}
+            timeoutSeconds: {{ .Values.identity.probes.startup.timeoutSeconds }}
+            failureThreshold: {{ .Values.identity.probes.startup.failureThreshold }}
+          {{- end }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.identity.probes.liveness.path | quote }}
+              port: http
+            periodSeconds: {{ .Values.identity.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.identity.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.identity.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.identity.probes.readiness.path | quote }}
+              port: http
+            periodSeconds: {{ .Values.identity.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.identity.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.identity.probes.readiness.failureThreshold }}
+            successThreshold: {{ .Values.identity.probes.readiness.successThreshold }}
+          resources:
+            {{- toYaml .Values.identity.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/rusto2
+              readOnly: true
+            - name: data
+              mountPath: /data
+              {{- if .Values.identity.keys.existingSecret }}
+              readOnly: true
+              {{- end }}
+            {{- with .Values.identity.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "rusto2.identity.fullname" . }}
+            defaultMode: 420
+        {{- if .Values.identity.keys.existingSecret }}
+        - name: data
+          secret:
+            secretName: {{ .Values.identity.keys.existingSecret }}
+            defaultMode: 288
+            items:
+              - key: {{ .Values.identity.keys.secretKey }}
+                path: ed25519.pem
+        {{- else if or .Values.identity.persistence.enabled .Values.identity.persistence.existingClaim }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "rusto2.identity.pvcName" . }}
+        {{- else }}
+        # No persistence: the key is regenerated on every pod restart. Use this
+        # only for disposable test environments.
+        - name: data
+          emptyDir: {}
+        {{- end }}
+        {{- with .Values.identity.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}

@@ -2,7 +2,7 @@ use std::{fs, path::PathBuf};
 
 use anyhow::{bail, Context};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use jsonwebtoken::EncodingKey;
+use jsonwebtoken::{DecodingKey, EncodingKey};
 use ring::{
     rand::SystemRandom,
     signature::{Ed25519KeyPair, KeyPair},
@@ -19,6 +19,7 @@ use crate::config::KeysConfig;
 pub struct KeyMaterial {
     pub kid: String,
     pub encoding: EncodingKey,
+    pub decoding: DecodingKey,
     #[allow(dead_code)]
     pub public_jwk: Value,
     pub jwks_json: String,
@@ -59,6 +60,8 @@ pub fn load_or_generate(config: &KeysConfig) -> anyhow::Result<KeyMaterial> {
 
     let raw_public = keypair.public_key().as_ref();
     let x = URL_SAFE_NO_PAD.encode(raw_public);
+    let decoding = DecodingKey::from_ed_components(&x)
+        .context("cannot build a decoding key from the Ed25519 public key")?;
 
     // RFC 7638 JWK thumbprint for an Ed25519 key.
     let canonical = format!(r#"{{"crv":"Ed25519","kty":"OKP","x":"{x}"}}"#);
@@ -82,6 +85,7 @@ pub fn load_or_generate(config: &KeysConfig) -> anyhow::Result<KeyMaterial> {
     Ok(KeyMaterial {
         kid,
         encoding,
+        decoding,
         public_jwk,
         jwks_json,
         jwks_etag,

@@ -19,6 +19,7 @@ anyhow.workspace = true
 axum.workspace = true
 base64.workspace = true
 bytes.workspace = true
+dashmap.workspace = true
 jsonwebtoken.workspace = true
 metrics.workspace = true
 mimalloc.workspace = true

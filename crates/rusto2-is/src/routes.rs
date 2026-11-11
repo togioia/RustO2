@@ -21,6 +21,14 @@ pub fn router(state: AppState) -> Router {
             "/oauth2/token",
             post(token::issue_token).layer(DefaultBodyLimit::max(16 * 1024)),
         )
+        .route(
+            "/oauth2/introspect",
+            post(token::introspect).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/oauth2/revoke",
+            post(token::revoke).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
         .route("/.well-known/jwks.json", get(jwks))
         .route("/.well-known/openid-configuration", get(discovery))
         .route("/healthz", get(health))
@@ -35,6 +43,8 @@ async fn index() -> impl IntoResponse {
         "version": env!("CARGO_PKG_VERSION"),
         "endpoints": {
             "token": "/oauth2/token",
+            "introspect": "/oauth2/introspect",
+            "revoke": "/oauth2/revoke",
             "jwks": "/.well-known/jwks.json",
             "discovery": "/.well-known/openid-configuration",
             "health": "/healthz",
@@ -77,13 +87,13 @@ async fn discovery(State(state): State<AppState>) -> impl IntoResponse {
     Json(json!({
         "issuer": state.config.token.issuer,
         "token_endpoint": format!("{}/oauth2/token", state.config.token.issuer.trim_end_matches('/')),
+        "introspection_endpoint": format!("{}/oauth2/introspect", state.config.token.issuer.trim_end_matches('/')),
+        "revocation_endpoint": format!("{}/oauth2/revoke", state.config.token.issuer.trim_end_matches('/')),
         "jwks_uri": format!("{}/.well-known/jwks.json", state.config.token.issuer.trim_end_matches('/')),
         "grant_types_supported": ["client_credentials"],
         "response_types_supported": ["token"],
         "token_endpoint_auth_methods_supported": ["client_secret_basic", "client_secret_post"],
         "scopes_supported": scopes,
-        "subject_types_supported": ["public"],
-        "id_token_signing_alg_values_supported": ["EdDSA"]
     }))
 }
 
@@ -96,6 +106,7 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
         "issuer": state.config.token.issuer,
         "clients": state.clients.len(),
         "kid": state.key.kid,
+        "revoked_tokens": state.revocations.len(),
     }))
 }
 

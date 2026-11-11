@@ -1,0 +1,29 @@
+{{- if and .Values.identity.persistence.enabled (not .Values.identity.persistence.existingClaim) (not .Values.identity.keys.existingSecret) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "rusto2.identity.pvcName" . }}
+  labels:
+    {{- include "rusto2.componentLabels" (dict "root" . "component" "identity") | nindent 4 }}
+    {{- with .Values.identity.persistence.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- if or .Values.identity.persistence.keep .Values.identity.persistence.annotations }}
+  annotations:
+    {{- if .Values.identity.persistence.keep }}
+    helm.sh/resource-policy: keep
+    {{- end }}
+    {{- with .Values.identity.persistence.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+spec:
+  accessModes:
+    {{- toYaml .Values.identity.persistence.accessModes | nindent 4 }}
+  {{- with .Values.identity.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.identity.persistence.size }}
+{{- end }}

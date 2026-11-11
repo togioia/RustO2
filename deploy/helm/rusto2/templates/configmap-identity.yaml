@@ -1,0 +1,29 @@
+{{- if not .Values.identity.config.clients }}
+{{- fail "identity.config.clients must contain at least one client" }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rusto2.identity.fullname" . }}
+  labels:
+    {{- include "rusto2.componentLabels" (dict "root" . "component" "identity") | nindent 4 }}
+data:
+  rusto2-is.yaml: |
+    server:
+      listen: 0.0.0.0:9000
+    token:
+      issuer: {{ include "rusto2.issuer" . | quote }}
+      audience: {{ .Values.identity.audience | quote }}
+      ttl_secs: {{ .Values.identity.config.token.ttl_secs }}
+    keys:
+      private_key_path: /data/ed25519.pem
+      generate_if_missing: {{ if .Values.identity.keys.existingSecret }}false{{ else }}{{ .Values.identity.keys.generateIfMissing }}{{ end }}
+    revocation:
+      max_ttl_secs: {{ .Values.identity.config.revocation.max_ttl_secs }}
+    clients:
+{{- range .Values.identity.config.clients }}
+      - client_id: {{ required "identity.config.clients[].client_id is required" .client_id | quote }}
+        client_secret: {{ printf "${%s}" (required "identity.config.clients[].secretEnv is required" .secretEnv) | quote }}
+        scopes: {{ default (list) .scopes | toJson }}
+        enabled: {{ if hasKey . "enabled" }}{{ .enabled }}{{ else }}true{{ end }}
+{{- end }}

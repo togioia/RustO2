@@ -23,6 +23,13 @@ credentials**. They are deliberately public and must be replaced through the
 - Replace demo clients with secrets stored in a secret manager; rotate them.
   Client secrets are compared in constant time, but they are stored as SHA-256
   digests, not Argon2 hashes; use high-entropy secrets.
+- Revocation is enforced only on routes with `revocation_check: true`, and the
+  blocklist is in-memory in a single identity-server replica. Use a shared,
+  persistent store before scaling `rusto2-is` horizontally; a restart clears
+  revocations until the tokens expire.
+- If Redis is enabled for quotas, secure it with a password/TLS and network
+  policy; `fail_open: true` trades strict quota for availability during a Redis
+  outage.
 - Keep `/.well-known/jwks.json` public, but restrict `/metrics`, `/healthz` and
   `/readyz` to the monitoring network.
 - Persist and back up the Ed25519 private key. Use `RUSTO2_KEY_PATH` to point to

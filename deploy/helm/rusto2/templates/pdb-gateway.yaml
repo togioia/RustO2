@@ -1,0 +1,24 @@
+{{- if .Values.gateway.podDisruptionBudget.enabled }}
+{{- if and .Values.gateway.podDisruptionBudget.minAvailable .Values.gateway.podDisruptionBudget.maxUnavailable }}
+{{- fail "set only one of gateway.podDisruptionBudget.minAvailable and maxUnavailable" }}
+{{- end }}
+{{- if and (not .Values.gateway.podDisruptionBudget.minAvailable) (not .Values.gateway.podDisruptionBudget.maxUnavailable) }}
+{{- fail "gateway.podDisruptionBudget requires minAvailable or maxUnavailable" }}
+{{- end }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "rusto2.gateway.fullname" . }}
+  labels:
+    {{- include "rusto2.componentLabels" (dict "root" . "component" "gateway") | nindent 4 }}
+spec:
+  {{- with .Values.gateway.podDisruptionBudget.minAvailable }}
+  minAvailable: {{ . }}
+  {{- end }}
+  {{- with .Values.gateway.podDisruptionBudget.maxUnavailable }}
+  maxUnavailable: {{ . }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "rusto2.componentSelectorLabels" (dict "root" . "component" "gateway") | nindent 6 }}
+{{- end }}

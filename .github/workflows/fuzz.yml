@@ -1,0 +1,35 @@
+name: Fuzz
+
+on:
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: libFuzzer targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install nightly Rust
+        uses: dtolnay/rust-toolchain@nightly
+      - name: Install cargo-fuzz and clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+          cargo +nightly install cargo-fuzz --locked
+      - name: Fuzz JWT header/segment parser
+        run: cargo +nightly fuzz run jwt_header -- -max_total_time=60
+      - name: Fuzz environment expander
+        run: cargo +nightly fuzz run env_expand -- -max_total_time=60
+      - name: Upload crash artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts
+          if-no-files-found: ignore
