@@ -21,7 +21,7 @@ authors = ["Tommaso Gioia"]
 anyhow = "1.0"
 async-trait = "0.1"
 axum = { version = "0.8.9", features = ["http2"] }
-base64 = "0.22"
+base64 = "0.23"
 bytes = "1"
 dashmap = "6.2"
 futures-util = "0.3"
