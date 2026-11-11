@@ -28,7 +28,7 @@ futures-util = "0.3"
 http = "1"
 jsonwebtoken = "9.3.1"
 metrics = "0.24"
-metrics-exporter-prometheus = { version = "0.16.2", default-features = false }
+metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 mimalloc = { version = "0.1", default-features = false }
 pem = "3.0"
 proptest = "1"
