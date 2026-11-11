@@ -13,6 +13,12 @@ chiave di WSO2 (pipeline di mediazione, policy per API, throttling, circuit
 breaker, osservabilità) e li ricostruisce su un runtime Rust moderno, senza
 application server, OSGi o management console. Non contiene codice WSO2.
 
+L'obiettivo è la **parità funzionale con il core Gateway/Key Manager di WSO2 API
+Manager** e con un sottoinsieme pratico del Micro Integrator. Oggi RustO2 copre
+diversi mattoni in stile APIM, ma mancano ancora il runtime Synapse e il
+contratto degli artefatti WSO2: la matrice onesta e i milestone sono in
+[`docs/WSO2_PARITY.md`](docs/WSO2_PARITY.md).
+
 > La documentazione completa, i benchmark e la guida curl sono in
 > **[README.md](README.md)** (inglese).
 

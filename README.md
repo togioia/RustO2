@@ -37,8 +37,12 @@ cloud-native experiment:
   publishes the public key as JWKS; `rusto2-gw` verifies tokens locally.
 
 This is **not** a WSO2 fork and contains no WSO2 code. It is an independent
-educational/engineering project that maps familiar WSO2 concepts onto a modern
-Rust stack.
+implementation whose target is **behavioral parity with the WSO2 API Manager
+Gateway/Key Manager core**, plus a practical subset of Micro Integrator
+mediation. Today it covers several APIM-shaped building blocks, but the Synapse
+mediation runtime and WSO2 artifact contracts are still on the roadmap. The
+honest gap analysis and milestone plan live in
+[docs/WSO2_PARITY.md](docs/WSO2_PARITY.md).
 
 ## What is implemented
 
@@ -599,6 +603,7 @@ deploy/
   prometheus/      scrape configuration and alert rules
   grafana/         datasource, dashboard provisioning, dashboard JSON
   helm/rusto2/     production-minded Kubernetes chart
+docs/              WSO2 parity matrix, Kubernetes, supply chain, fuzzing, benchmarks
 docker/            multi-stage distroless Dockerfiles
 fuzz/              cargo-fuzz targets (excluded from the normal workspace)
 scripts/           demo, smoke, benchmark and oha installer
@@ -632,14 +637,29 @@ rusto2-is.yaml     clients, issuer, key location
 
 ## Roadmap
 
-- TLS termination and HTTP/3 at the edge
-- OpenTelemetry OTLP traces exported to Tempo/Jaeger, with trace-context
-  propagation through the gateway
-- Hot reload of `rusto2.yaml` via SIGHUP or a file watcher
-- Shared revocation store for a multi-replica identity server
+The primary roadmap is the WSO2 fidelity track in
+[docs/WSO2_PARITY.md](docs/WSO2_PARITY.md):
+
+1. **M1 — WSO2 artifacts:** parse APIM API definitions and Synapse `<api>` XML,
+   extract CAR packages and map real resources.
+2. **M2 — Mediation engine:** `log`, `property`, `filter`, `switch`,
+   `payloadFactory`, `enrich`, `call`, `send`, `respond` and fault sequences.
+3. **M3 — APIM semantics:** applications/subscriptions, tiers, lifecycle, API
+   keys, backend JWT and CORS.
+4. **M4 — Key manager:** authorization code/PKCE, password grant, refresh tokens,
+   DCR, opaque tokens and multiple key managers.
+5. **M5 — Traffic Manager parity:** APIM tier policies and advanced throttling.
+6. **M6 — MI subset:** data services, tasks, stores/processors, hot deployment
+   and OTel/analytics.
+
+Supporting platform work, lower priority until M1–M3 are credible:
+
+- OpenTelemetry OTLP traces exported to Tempo/Jaeger
+- Hot reload of configuration and CAR artifacts
+- Shared revocation storage for a multi-replica identity server
+- TLS/mTLS, overlapping JWT key rotation and Argon2 client secrets
 - Fuzzing and property tests wired into scheduled CI
-- Pluggable request/response transformers (the "mediation" counterpart)
-- Overlapping JWT key rotation with a configurable grace period
+- SHA-pinned GitHub Actions and OpenSSF Scorecard
 
 ## License
 
