@@ -37,7 +37,7 @@ roxmltree = "0.21"
 url = "2"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "stream", "json"] }
-redis = { version = "0.32", features = ["tokio-comp", "connection-manager", "script"] }
+redis = { version = "1.8", features = ["tokio-comp", "connection-manager", "script"] }
 ring = "0.17"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1", features = ["derive"] }
