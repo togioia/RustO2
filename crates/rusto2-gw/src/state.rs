@@ -8,6 +8,7 @@ use metrics_exporter_prometheus::PrometheusHandle;
 use reqwest::Client;
 
 use crate::{
+    artifact,
     circuit_breaker::BreakerRegistry,
     config::{GatewayConfig, RateLimitStore},
     jwks::JwksCache,
@@ -27,6 +28,9 @@ pub struct AppState {
     pub breakers: Arc<BreakerRegistry>,
     pub metrics: PrometheusHandle,
     pub started: Instant,
+    pub artifact_api_count: usize,
+    pub artifact_sources: Vec<String>,
+    pub mediation_body_bytes: usize,
 }
 
 const _: fn() = || {
@@ -36,7 +40,12 @@ const _: fn() = || {
 
 impl AppState {
     pub async fn build(config: GatewayConfig, metrics: PrometheusHandle) -> anyhow::Result<Self> {
-        let routes = Arc::new(routes::compile(&config)?);
+        let artifacts = artifact::load(&config.artifacts)?;
+        for ignored in &artifacts.ignored {
+            tracing::warn!(artifact = %ignored, "unsupported WSO2 artifact was not loaded");
+        }
+        let routes = Arc::new(routes::compile_all(&config, &artifacts.routes)?);
+        let mediation_body_bytes = config.artifacts.max_body_bytes;
 
         let client = Client::builder()
             .connect_timeout(Duration::from_secs(config.server.connect_timeout_secs))
@@ -95,6 +104,9 @@ impl AppState {
             breakers,
             metrics,
             started: Instant::now(),
+            artifact_api_count: artifacts.api_count,
+            artifact_sources: artifacts.sources,
+            mediation_body_bytes,
         })
     }
 }

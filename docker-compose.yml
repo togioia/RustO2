@@ -33,6 +33,7 @@ services:
     image: rusto2-gw:dev
     environment:
       RUSTO2_CONFIG: /etc/rusto2/rusto2.yaml
+      RUSTO2_ARTIFACTS_DIR: /etc/rusto2/artifacts
       RUSTO2_JWKS_URL: http://rusto2-is:9000/.well-known/jwks.json
       RUSTO2_ISSUER: http://localhost:9000
       RUSTO2_INTROSPECTION_URL: http://rusto2-is:9000/oauth2/introspect
@@ -45,6 +46,7 @@ services:
       MIMALLOC_ARENA_EAGER_COMMIT: "0"
     volumes:
       - ./rusto2.yaml:/etc/rusto2/rusto2.yaml:ro
+      - ./examples/wso2:/etc/rusto2/artifacts:ro
     ports:
       - "8080:8080"
     depends_on:

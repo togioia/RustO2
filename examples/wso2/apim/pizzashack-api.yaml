@@ -1,0 +1,41 @@
+# WSO2 API Manager 4.x API definition, as exported by apictl.
+#
+# RustO2 imports the operations, scopes, lifecycle state and endpoint. The
+# external path is /pizzashack/1.0.0/<target>.
+type: api
+version: v4.2.0
+data:
+  name: PizzaShackAPI
+  context: /pizzashack
+  version: 1.0.0
+  provider: admin
+  lifeCycleStatus: PUBLISHED
+  transport:
+    - http
+  authorizationHeader: Authorization
+  securityScheme:
+    - oauth2
+  throttlingPolicy: Unlimited
+  endpointConfig:
+    endpoint_type: http
+    production_endpoints:
+      url: http://httpbin:8080
+  operations:
+    - target: /get
+      verb: GET
+      authType: Application & Application User
+      throttlingPolicy: Unlimited
+      scopes:
+        - read
+    - target: /anything/{id}
+      verb: GET
+      authType: Application & Application User
+      throttlingPolicy: Unlimited
+      scopes:
+        - read
+    - target: /post
+      verb: POST
+      authType: Application & Application User
+      throttlingPolicy: Unlimited
+      scopes:
+        - write

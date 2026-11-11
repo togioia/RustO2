@@ -16,6 +16,10 @@ pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
         "version": env!("CARGO_PKG_VERSION"),
         "uptime_secs": state.started.elapsed().as_secs(),
         "routes": state.routes.len(),
+        "wso2_artifacts": {
+            "apis": state.artifact_api_count,
+            "sources": state.artifact_sources,
+        },
         "jwks": {
             "keys": jwks.keys,
             "last_refresh_age_secs": jwks.last_refresh_age_secs,

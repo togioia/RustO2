@@ -31,24 +31,28 @@ cloud-native experiment:
   YAML configuration and a container.
 - **No garbage collector.** Request handling is ownership-based, so there are no
   GC pauses to pollute tail latency.
-- **Streaming by default.** Request and response bodies are piped through the
-  gateway without being buffered.
+- **Streaming by default for native routes.** Request and response bodies are
+  piped through the gateway without being buffered; WSO2 artifact routes buffer
+  only as much as mediation needs, within `artifacts.max_body_bytes`.
 - **Security without shared secrets.** `rusto2-is` signs Ed25519 JWTs and
   publishes the public key as JWKS; `rusto2-gw` verifies tokens locally.
 
 This is **not** a WSO2 fork and contains no WSO2 code. It is an independent
 implementation whose target is **behavioral parity with the WSO2 API Manager
 Gateway/Key Manager core**, plus a practical subset of Micro Integrator
-mediation. Today it covers several APIM-shaped building blocks, but the Synapse
-mediation runtime and WSO2 artifact contracts are still on the roadmap. The
-honest gap analysis and milestone plan live in
-[docs/WSO2_PARITY.md](docs/WSO2_PARITY.md).
+mediation. It now imports APIM `api.yaml` definitions, Synapse `<api>`/sequence
+XML and CAR packages, and executes a growing mediator subset. The honest gap
+analysis and milestone plan live in
+[docs/WSO2_PARITY.md](docs/WSO2_PARITY.md); the supported Synapse subset is
+documented in [docs/SYNAPSE.md](docs/SYNAPSE.md).
 
 ## What is implemented
 
 | WSO2 concept | RustO2 implementation |
 |---|---|
-| API Gateway / Synapse mediation | `rusto2-gw`: axum server + streaming reqwest proxy |
+| WSO2 artifacts | APIM `api.yaml`, Synapse `<api>`/`<sequence>` XML and `.car` ZIP import |
+| Synapse mediation subset | `rusto2-synapse`: `log`, `property`, `filter`, `switch`, `payloadFactory`, `enrich`, `call`, `send`, `respond`, `header`, `drop`, named sequences/endpoints and fault sequences |
+| API Gateway / reverse proxy | `rusto2-gw`: axum server, streaming reqwest proxy for native routes |
 | Per-API security policy | Declarative routes in `rusto2.yaml` with method allowlists, JWT and scopes |
 | Key manager / OAuth2 token service | `rusto2-is`: `client_credentials`, Ed25519 JWTs, JWKS, discovery, RFC 7662/7009 |
 | JWT validation at the gateway | Axum middleware with in-memory JWKS cache and key rotation refresh |
@@ -60,6 +64,12 @@ honest gap analysis and milestone plan live in
 
 ### Feature checklist
 
+- [x] APIM API definition import: context/version, operations, scopes, endpoint
+- [x] Synapse `<api>` import with URI templates and in/out/fault sequences
+- [x] CAR package loading with size limits and explicit unsupported-artifact warnings
+- [x] Mediation engine: `log`, `property`, `filter`, `switch`, `payloadFactory`,
+      `enrich`, `call`, `send`, `respond`, `header`, `drop`, named sequences/endpoints
+- [x] Explicit failure on unsupported mediators, endpoints and security schemes
 - [x] Per-route allowlisted methods, upstream and strip-prefix policies
 - [x] Streaming request/response proxying with connection pooling
 - [x] `X-Forwarded-For`, `X-Forwarded-Host`, `X-Forwarded-Proto`
@@ -84,12 +94,14 @@ honest gap analysis and milestone plan live in
 flowchart LR
     C["Client"]
     IS["rusto2-is<br/>OAuth2 + Ed25519 + JWKS<br/>:9000"]
-    GW["rusto2-gw<br/>streaming proxy + policy engine<br/>:8080"]
+    GW["rusto2-gw<br/>policy engine + streaming proxy<br/>:8080"]
+    SYN["rusto2-synapse<br/>APIM/Synapse/CAR + mediators"]
     R[("Redis<br/>distributed quotas")]
     B["Backend<br/>httpbin :8080"]
     P["Prometheus<br/>:9090"]
     G["Grafana<br/>:3000"]
 
+    SYN -->|"artifact routes"| GW
     C -->|"1. POST /oauth2/token"| IS
     IS -->|"2. signed JWT"| C
     C -->|"3. Bearer JWT"| GW
@@ -121,6 +133,54 @@ sequenceDiagram
     B-->>GW: response (streaming)
     GW-->>C: 200 + X-RustO2-Request-Id
 ```
+
+### WSO2 artifact compatibility
+
+Artifacts are loaded at startup from `artifacts.paths`. Each resource becomes a
+route with the WSO2 path shape `/context/version/resource`, and is executed by
+the Synapse mediation engine. Native `rusto2.yaml` routes keep the streaming
+proxy path.
+
+| Artifact | What is imported |
+|---|---|
+| APIM `api.yaml` | name, context, version, lifecycle state, endpoint, operations, HTTP verbs and OAuth2 scopes |
+| OpenAPI with `x-wso2-*` | base path, server/endpoint URLs, operations and scopes |
+| Synapse `<api>` | resources, URI templates, in/out/fault sequences and named sequence/endpoint references |
+| Synapse `<sequence>` / `<endpoint>` | named definitions used by API sequences |
+| `.car` | ZIP scan for the artifact types above; proxy services, tasks and stores are reported as unsupported |
+
+The demo loads one APIM definition and one Synapse API:
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:9000/oauth2/token \
+  -H 'Content-Type: application/x-www-form-urlencoded' \
+  --data-urlencode grant_type=client_credentials \
+  --data-urlencode client_id=demo-client \
+  --data-urlencode client_secret=demo-secret \
+  --data-urlencode 'scope=read write' \
+  | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+
+# APIM api.yaml: GET /pizzashack/1.0.0/get
+curl -i -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/pizzashack/1.0.0/get
+
+# Synapse <api>: property -> filter -> switch -> payloadFactory -> outSequence
+curl -i -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/demo/1.0.0/items/42
+
+# Synapse call through a named endpoint + outSequence
+curl -i -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/demo/1.0.0/anything/foo
+```
+
+`examples/wso2/build-car.sh` packages the same artifacts as a `.car`; point
+`artifacts.paths` at the archive to exercise the CAR loader.
+
+Unsupported mediators fail **at startup** with the mediator name and XML
+location. Unsupported artifact types inside a CAR are logged and skipped; the
+loaded APIs still start, which matches a partial deployment better than a silent
+drop. See [docs/SYNAPSE.md](docs/SYNAPSE.md) for the exact mediator and
+expression subset.
 
 ### Security model
 
@@ -341,6 +401,16 @@ rate_limiting:
   key_prefix: "rusto2:ratelimit:"
   fail_open: true
 
+artifacts:
+  paths:
+    - ./examples/wso2/apim
+    - ./examples/wso2/synapse
+  auth: jwt                   # security for plain Synapse <api> resources
+  scopes: []
+  revocation_check: false
+  max_body_bytes: 2097152     # mediated routes buffer up to this limit
+  default_upstream: http://httpbin:8080
+
 routes:
   - name: httpbin
     prefix: /api
@@ -410,6 +480,7 @@ expanded from the environment.
 | Variable | Service | Purpose |
 |---|---|---|
 | `RUSTO2_CONFIG` | both | Path to the YAML file |
+| `RUSTO2_ARTIFACTS_DIR` | gateway | Base directory for WSO2 artifacts in containers |
 | `RUSTO2_GW_LISTEN` | gateway | Override listen address |
 | `RUSTO2_ISSUER` | gateway | Expected JWT issuer |
 | `RUSTO2_JWKS_URL` | gateway | Internal JWKS URL |
@@ -565,11 +636,11 @@ cosign and attaches SLSA build provenance. CI also runs `cargo-audit`
 (non-blocking advisory scan) and `cargo-deny` (blocking policy gate).
 
 ```bash
-cosign verify ghcr.io/togioia/rusto2-gw:0.2.0 \
+cosign verify ghcr.io/togioia/rusto2-gw:0.3.0 \
   --certificate-identity-regexp 'https://github.com/togioia/RustO2/.github/workflows/release.yml@.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
-gh attestation verify oci://ghcr.io/togioia/rusto2-gw:0.2.0 \
+gh attestation verify oci://ghcr.io/togioia/rusto2-gw:0.3.0 \
   --repo togioia/RustO2
 ```
 
@@ -598,12 +669,14 @@ expander fuzz targets are documented in [docs/FUZZING.md](docs/FUZZING.md).
 crates/
   rusto2-common/   telemetry, request correlation, env expansion
   rusto2-is/       OAuth2 client_credentials, Ed25519 keys, JWKS, revocation
+  rusto2-synapse/  WSO2 artifact parser, MessageContext and mediation engine
   rusto2-gw/       proxy, route policy, JWT filter, quota backends, breaker
 deploy/
   prometheus/      scrape configuration and alert rules
   grafana/         datasource, dashboard provisioning, dashboard JSON
   helm/rusto2/     production-minded Kubernetes chart
-docs/              WSO2 parity matrix, Kubernetes, supply chain, fuzzing, benchmarks
+docs/              WSO2 parity matrix, Synapse subset, Kubernetes, supply chain, fuzzing, benchmarks
+examples/wso2/     APIM api.yaml, Synapse <api>/sequences and CAR build script
 docker/            multi-stage distroless Dockerfiles
 fuzz/              cargo-fuzz targets (excluded from the normal workspace)
 scripts/           demo, smoke, benchmark and oha installer
@@ -613,9 +686,22 @@ rusto2-is.yaml     clients, issuer, key location
 
 ## Design notes and limitations
 
-- **Streaming, not buffering.** `reqwest::Body::wrap_stream` and
-  `Body::from_stream` keep memory flat even for large payloads. The gateway does
-  not retry non-idempotent requests.
+- **Streaming for native routes, buffering for mediated routes.** YAML routes use
+  `reqwest::Body::wrap_stream` and `Body::from_stream`, so large payloads stay
+  flat. WSO2 artifact routes must materialize the body to run `payloadFactory`,
+  `enrich` and expressions; `artifacts.max_body_bytes` bounds that buffer
+  (2 MiB by default) and returns `413` beyond it. The gateway does not retry
+  non-idempotent requests.
+- **Mediation is a deliberate subset.** `rusto2-synapse` implements the
+  mediators listed in [docs/SYNAPSE.md](docs/SYNAPSE.md). `class`, `script`,
+  `xslt`, `iterate`, `clone`, `aggregate` and the rest fail at startup rather
+  than being skipped. Java class mediators are out of scope; a native plugin ABI
+  is the intended extension point.
+- **APIM policy is partial.** OAuth2 scopes and PUBLISHED/DEPRECATED lifecycle
+  state are enforced. API keys, subscriptions, Bronze/Silver/Gold tiers, custom
+  throttling policies, backend JWT, CORS and failover/load-balanced endpoints
+  are M3 work. APIs using an unsupported security scheme, endpoint type or
+  custom authorization header are rejected at load time.
 - **Latency accounting.** The gateway's Prometheus histogram stops when the
   upstream response headers arrive; oha measures the full request/response cycle.
   Both are useful, but they are not the same number.
@@ -640,12 +726,15 @@ rusto2-is.yaml     clients, issuer, key location
 The primary roadmap is the WSO2 fidelity track in
 [docs/WSO2_PARITY.md](docs/WSO2_PARITY.md):
 
-1. **M1 — WSO2 artifacts:** parse APIM API definitions and Synapse `<api>` XML,
-   extract CAR packages and map real resources.
-2. **M2 — Mediation engine:** `log`, `property`, `filter`, `switch`,
-   `payloadFactory`, `enrich`, `call`, `send`, `respond` and fault sequences.
-3. **M3 — APIM semantics:** applications/subscriptions, tiers, lifecycle, API
-   keys, backend JWT and CORS.
+1. **M1 — WSO2 artifacts: implemented.** APIM `api.yaml`, OpenAPI with
+   `x-wso2-*`, Synapse `<api>`/`<sequence>`/`<endpoint>` XML and `.car` import.
+2. **M2 — Mediation engine: implemented for the documented subset.** `log`,
+   `property`, `filter`, `switch`, `payloadFactory`, `enrich`, `call`, `send`,
+   `respond`, `header`, `drop`, named sequences/endpoints and fault sequences.
+   Next: more expressions, XML enrichment and a native plugin ABI.
+3. **M3 — APIM semantics (next):** applications/subscriptions, tiers, API
+   keys, backend JWT, CORS, failover/load-balanced endpoints and fuller
+   lifecycle enforcement.
 4. **M4 — Key manager:** authorization code/PKCE, password grant, refresh tokens,
    DCR, opaque tokens and multiple key managers.
 5. **M5 — Traffic Manager parity:** APIM tier policies and advanced throttling.

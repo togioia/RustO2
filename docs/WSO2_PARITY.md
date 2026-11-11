@@ -13,26 +13,27 @@ Legend: ✅ faithful enough to use · 🟡 partial / different shape · ❌ miss
 A feature list can look impressive while missing the contracts that make WSO2
 WSO2: Synapse XML, API definitions, mediation sequences, subscriptions,
 throttling tiers, lifecycle states, backend JWTs and the key-manager grants. The
-gateway must eventually consume the same artifacts and produce the same
-observable decisions, not just expose similar knobs.
+gateway now consumes a subset of those artifacts and produces the same
+observable path, method and OAuth2-scope decisions for the covered cases. The
+matrix below keeps the remaining contract gaps visible.
 
 ## Runtime and artifacts
 
 | WSO2 capability | RustO2 status | Notes |
 |---|---|---|
-| Synapse XML `<api>`, `<resource>`, `<sequence>` | ❌ | Current configuration is YAML-native; no XML/Synapse parser yet |
-| API definition (Publisher OpenAPI/APIM artifact) | ❌ | No import of `context`, `version`, resources, endpoint config or tiers |
-| CAR package deployment | ❌ | No `.car` extraction or artifact lifecycle |
-| Mediation sequence engine | ❌ | No `log`, `property`, `filter`, `switch`, `payloadFactory`, `enrich`, `call`, `send`, `respond`, `fault` interpreter |
+| Synapse XML `<api>`, `<resource>`, `<sequence>` | 🟡 | `rusto2-synapse` imports APIs, resources, in/out/fault sequences and named sequences/endpoints |
+| API definition (Publisher OpenAPI/APIM artifact) | 🟡 | APIM 4.x `api.yaml` and OpenAPI with `x-wso2-*`; endpoint policy and tiers are partial |
+| CAR package deployment | 🟡 | ZIP scan with limits; unsupported artifact types are reported, no hot deployment |
+| Mediation sequence engine | 🟡 | `log`, `property`, `filter`, `switch`, `payloadFactory`, `enrich`, `call`, `send`, `respond`, `header`, `drop`; see [SYNAPSE.md](SYNAPSE.md) |
 | Custom class mediator | 🟡 | Java binary compatibility is out of scope; a native/WASM plugin ABI is the intended path |
-| Resource URI templates | ❌ | Routes are prefix-based, not WSO2 resource templates |
+| Resource URI templates | ✅ | Literal segments, `{name}` parameters and final `*` wildcard |
 | HTTP method allowlists | ✅ | Per-route allowlist with `405` |
-| Endpoint HTTP backend | ✅ | Streaming proxy with pooling |
-| Endpoint failover / load balance | ❌ | Single upstream per route |
-| Fault sequence | ❌ | Gateway-generated JSON errors only |
-| Request/response streaming | ✅ | End-to-end streaming, no buffering |
+| Endpoint HTTP backend | ✅ | Streaming proxy for native routes; mediated `call`/`send` for artifacts |
+| Endpoint failover / load balance | ❌ | Rejected at load time; M3 |
+| Fault sequence | 🟡 | in/out/fault execution and `HTTP_SC`; `makefault` is not implemented |
+| Request/response streaming | 🟡 | Native routes stream; mediated routes buffer up to `artifacts.max_body_bytes` |
 | CORS | ❌ | No APIM-style CORS configuration |
-| API lifecycle enforcement | ❌ | No PUBLISHED / DEPRECATED / RETIRED / BLOCKED state |
+| API lifecycle enforcement | 🟡 | PUBLISHED/DEPRECATED are loaded, others are skipped at startup; no per-request lifecycle handling |
 | Response caching | ❌ | Not implemented |
 | JSON/XML schema validation | ❌ | Not implemented |
 
@@ -50,7 +51,7 @@ observable decisions, not just expose similar knobs.
 | JWKS discovery | ✅ | JWKS with ETag and key-rotation refresh |
 | Token introspection | ✅ | RFC 7662, in-memory blocklist, opt-in gateway check |
 | Token revocation | ✅ | RFC 7009, `jti` TTL |
-| Scopes | 🟡 | Enforced per route; not tied to APIM API resources |
+| Scopes | 🟡 | Enforced per route and per APIM operation; no subscription-level scope mapping |
 | Subscription validation | ❌ | No applications, consumer keys or subscriptions |
 | API keys | ❌ | No API-key security scheme |
 | Mutual TLS | ❌ | Not implemented |
@@ -89,7 +90,7 @@ observable decisions, not just expose similar knobs.
 
 | WSO2 capability | RustO2 status | Notes |
 |---|---|---|
-| Synapse mediation runtime | ❌ | Highest-priority fidelity gap |
+| Synapse mediation runtime | 🟡 | Supported mediator subset executes real API resources; class mediators and AXIOM-level XML are missing |
 | Data services | ❌ | Not implemented |
 | Scheduled tasks | ❌ | Not implemented |
 | Message stores / processors | ❌ | Not implemented |
@@ -113,7 +114,7 @@ observable decisions, not just expose similar knobs.
 
 ## Fidelity roadmap (ordered)
 
-### M1 — WSO2 artifact compatibility
+### M1 — WSO2 artifact compatibility — ✅ done for the documented formats
 Read real WSO2 artifacts without hand-written YAML:
 
 1. Parse an APIM API definition (`context`, `version`, resources, endpoint
@@ -125,13 +126,16 @@ Read real WSO2 artifacts without hand-written YAML:
 
 **Exit criteria:** a sample WSO2 API passes through the gateway with the same
 external path shape (`/context/version/resource`) and method/security decisions.
+**Status:** met by `examples/wso2` and `scripts/smoke.sh`. APIM tier policy,
+failover/load-balanced endpoints and endpoint security are explicitly M3, not
+silently accepted.
 
-### M2 — Mediation engine
+### M2 — Mediation engine — 🟡 implemented subset
 Introduce a `rusto2-synapse` crate with a sequence interpreter and a message
 context compatible with Synapse semantics:
 
 - `log`, `property`, `filter`, `switch`, `payloadFactory`, `enrich`, `call`,
-  `send`, `respond`, `header`, `fault`.
+  `send`, `respond`, `header`, `drop`.
 - In/out/fault sequences, named sequences and endpoint references.
 - JSON and XML payload support, properties and transport headers.
 - A native mediator plugin ABI (Rust/WASM); Java class mediators are out of
@@ -139,8 +143,12 @@ context compatible with Synapse semantics:
 
 **Exit criteria:** the WSO2 quick-start mediation samples run unchanged (except
 for class mediators) and produce equivalent responses.
+**Status:** the supported subset runs unchanged and is covered by unit and
+end-to-end tests; arbitrary quick-start samples that use `makefault`, `script`,
+`xslt`, `iterate`, `clone` or `class` still fail explicitly. The plugin ABI is
+not implemented yet.
 
-### M3 — API Manager policy layer
+### M3 — API Manager policy layer — next
 - Applications, subscriptions and consumer keys.
 - API/resource scopes and API keys.
 - Lifecycle states enforced at the gateway.
@@ -175,8 +183,14 @@ for class mediators) and produce equivalent responses.
 
 ## Current position
 
-RustO2 today is a **gateway/key-manager prototype with several APIM-shaped
-building blocks** (JWT, quotas, revocation, resilience, observability), but the
-Synapse mediation runtime and WSO2 artifact contracts are still missing. The
-platform-hardening items (OpenTelemetry, hot reload, distributed revocation,
-supply chain) matter, but they do not close the main fidelity gap.
+RustO2 is now a **WSO2 artifact-compatible gateway prototype**: it imports real
+APIM definitions, Synapse APIs/sequences and CAR packages, maps WSO2 paths to
+resources and executes the supported mediation subset. M1 is met for the
+documented formats; M2 is a working subset, not the full Synapse runtime.
+
+The remaining fidelity gap is concentrated in APIM policy semantics (M3):
+subscriptions, applications, API keys, throttling tiers, backend JWT, CORS,
+failover/load-balanced endpoints and per-request lifecycle behavior. M4–M6
+remain ahead. The platform-hardening items (OpenTelemetry, hot reload,
+distributed revocation, supply chain) matter, but they do not close the main
+fidelity gap.

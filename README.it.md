@@ -14,10 +14,11 @@ breaker, osservabilità) e li ricostruisce su un runtime Rust moderno, senza
 application server, OSGi o management console. Non contiene codice WSO2.
 
 L'obiettivo è la **parità funzionale con il core Gateway/Key Manager di WSO2 API
-Manager** e con un sottoinsieme pratico del Micro Integrator. Oggi RustO2 copre
-diversi mattoni in stile APIM, ma mancano ancora il runtime Synapse e il
-contratto degli artefatti WSO2: la matrice onesta e i milestone sono in
-[`docs/WSO2_PARITY.md`](docs/WSO2_PARITY.md).
+Manager** e con un sottoinsieme pratico del Micro Integrator. Oggi RustO2 importa
+`api.yaml` di APIM, API/sequence Synapse e pacchetti `.car`, ed esegue un
+sottoinsieme crescente di mediator. La matrice onesta è in
+[`docs/WSO2_PARITY.md`](docs/WSO2_PARITY.md); il subset Synapse supportato è in
+[`docs/SYNAPSE.md`](docs/SYNAPSE.md).
 
 > La documentazione completa, i benchmark e la guida curl sono in
 > **[README.md](README.md)** (inglese).
@@ -27,11 +28,16 @@ contratto degli artefatti WSO2: la matrice onesta e i milestone sono in
 | Componente | Ruolo |
 |---|---|
 | `rusto2-gw` | Proxy HTTP streaming su axum + reqwest, con policy per rotta |
+| `rusto2-synapse` | Parser artefatti WSO2 (APIM, Synapse, CAR) e motore di mediazione |
 | `rusto2-is` | OAuth2 `client_credentials`, JWT Ed25519, JWKS e discovery |
 | `rusto2-common` | Log JSON, correlation ID, metriche e helper condivisi |
 
 Funzionalità principali:
 
+- import di API definition APIM, API Synapse con URI-template, sequence
+  in/out/fault, endpoint e sequence nominali, pacchetti `.car`;
+- motore di mediazione con `log`, `property`, `filter`, `switch`,
+  `payloadFactory`, `enrich`, `call`, `send`, `respond`, `header`, `drop`;
 - rotte dichiarative in `rusto2.yaml` con metodi consentiti, scope richiesti,
   quota e circuit breaker;
 - rate limiting con backend in memoria o **Redis** (token bucket Lua atomico)
@@ -82,7 +88,23 @@ curl -i -H "Authorization: Bearer $TOKEN" \
 
 curl -i http://localhost:8080/public/get     # rotta anonima
 curl -i http://localhost:8080/api/get        # 401, token mancante
+
+# Artefatto APIM: path /context/version/resource
+curl -i -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/pizzashack/1.0.0/get
+
+# Artefatto Synapse: property -> filter -> switch -> payloadFactory -> outSequence
+curl -i -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/demo/1.0.0/items/42
+
+# call verso endpoint nominale + outSequence
+curl -i -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/demo/1.0.0/anything/foo
 ```
+
+Gli artefatti demo sono in `examples/wso2/`; `examples/wso2/build-car.sh`
+produce un `.car` equivalente. I mediator non supportati falliscono
+all'avvio con nome e posizione XML, invece di essere ignorati.
 
 ## Test
 
@@ -93,8 +115,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 Sono inclusi property test (`proptest`), un harness `cargo-fuzz` documentato in
-`docs/FUZZING.md`, il chart Helm in `deploy/helm/rusto2` e la policy supply
-chain in `docs/SUPPLY_CHAIN.md`.
+`docs/FUZZING.md`, il chart Helm in `deploy/helm/rusto2`, la policy supply
+chain in `docs/SUPPLY_CHAIN.md` e il subset Synapse in `docs/SYNAPSE.md`.
 
 ## Nota sul progetto
 

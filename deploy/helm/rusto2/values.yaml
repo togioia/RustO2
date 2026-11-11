@@ -315,6 +315,16 @@ gateway:
       redis_url: redis://redis:6379/0
       key_prefix: "rusto2:ratelimit:"
       fail_open: true
+    # -- WSO2 artifacts loaded at startup. Mount them with
+    # gateway.extraVolumes/extraVolumeMounts and list absolute container paths
+    # here. Empty paths disables artifact loading.
+    artifacts:
+      paths: []
+      auth: jwt
+      scopes: []
+      revocation_check: false
+      max_body_bytes: 2097152
+      default_upstream: ""
     # -- Routes rendered verbatim into rusto2.yaml. "upstream" must be
     # reachable from the gateway pod. The defaults mirror the Compose demo and
     # expect a Service named "httpbin" on port 8080 in this namespace. Replace

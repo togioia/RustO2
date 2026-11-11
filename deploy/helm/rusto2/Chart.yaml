@@ -2,8 +2,8 @@ apiVersion: v2
 name: rusto2
 description: RustO2 - a Rust re-implementation of a WSO2-style API gateway and OAuth2/Ed25519 identity server.
 type: application
-version: 0.2.0
-appVersion: "0.2.0"
+version: 0.3.0
+appVersion: "0.3.0"
 kubeVersion: ">=1.25.0-0"
 home: https://github.com/togioia/RustO2
 icon: https://raw.githubusercontent.com/togioia/RustO2/main/docs/assets/logo.svg

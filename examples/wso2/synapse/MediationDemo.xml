@@ -1,0 +1,70 @@
+<!--
+  Synapse API artifact using only the mediators RustO2 implements.
+  Deployed with the APIM definition next to it, this demonstrates:
+    - URI-template path parameters (uri.var.id)
+    - property, log, filter, switch, enrich, payloadFactory, header, respond
+    - call via a named endpoint and an outSequence
+    - faultSequence referenced by key (see CommonSequences.xml)
+-->
+<api xmlns="http://ws.apache.org/ns/synapse"
+     name="MediationDemo"
+     context="/demo"
+     version="1.0.0">
+  <resource methods="GET" uri-template="/items/{id}">
+    <inSequence>
+      <property name="itemId" expression="get-property('uri.var.id')" scope="default" type="STRING"/>
+      <log level="custom">
+        <property name="itemId" expression="get-property('itemId')"/>
+      </log>
+      <filter source="get-property('itemId')" regex="^4[0-9]$">
+        <then>
+          <property name="kind" value="special" scope="default"/>
+        </then>
+        <else>
+          <property name="kind" value="normal" scope="default"/>
+        </else>
+      </filter>
+      <switch source="get-property('itemId')">
+        <case regex="^42$">
+          <property name="hit" value="answer" scope="default"/>
+        </case>
+        <default>
+          <property name="hit" value="miss" scope="default"/>
+        </default>
+      </switch>
+      <enrich>
+        <target type="body"/>
+        <source type="inline" media-type="application/json">{"source":"enrich"}</source>
+      </enrich>
+      <payloadFactory media-type="json">
+        <format>{"id":"$1","kind":"$2","hit":"$3","mediator":"synapse"}</format>
+        <args>
+          <arg expression="get-property('itemId')"/>
+          <arg expression="get-property('kind')"/>
+          <arg expression="get-property('hit')"/>
+        </args>
+      </payloadFactory>
+    </inSequence>
+    <outSequence>
+      <header name="X-Mediated" value="synapse" scope="transport"/>
+      <respond/>
+    </outSequence>
+  </resource>
+
+  <resource methods="GET" uri-template="/anything/*">
+    <inSequence>
+      <property name="backendPath" expression="get-property('REST_URL_POSTFIX')" scope="default"/>
+      <log level="custom">
+        <property name="backendPath" expression="get-property('backendPath')"/>
+      </log>
+      <call>
+        <endpoint key="HttpbinEndpoint"/>
+      </call>
+    </inSequence>
+    <outSequence>
+      <header name="X-Out-Sequence" value="true" scope="transport"/>
+      <respond/>
+    </outSequence>
+    <faultSequence key="CommonFault"/>
+  </resource>
+</api>

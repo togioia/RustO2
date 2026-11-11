@@ -1,0 +1,18 @@
+<!-- Named artifacts referenced by MediationDemo.xml. In a CAR these live under
+     synapse-configs/default/sequences and synapse-configs/default/endpoints. -->
+<definitions xmlns="http://ws.apache.org/ns/synapse">
+  <endpoint name="HttpbinEndpoint">
+    <address uri="http://httpbin:8080"/>
+  </endpoint>
+
+  <sequence name="CommonFault">
+    <property name="HTTP_SC" value="502" scope="axis2" type="INTEGER"/>
+    <payloadFactory media-type="json">
+      <format>{"fault":"upstream","code":"$1"}</format>
+      <args>
+        <arg expression="get-property('ERROR_CODE')"/>
+      </args>
+    </payloadFactory>
+    <respond/>
+  </sequence>
+</definitions>

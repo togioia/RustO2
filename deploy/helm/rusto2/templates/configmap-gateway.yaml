@@ -30,5 +30,20 @@ data:
       redis_url: {{ .Values.gateway.config.rate_limiting.redis_url | quote }}
       key_prefix: {{ .Values.gateway.config.rate_limiting.key_prefix | quote }}
       fail_open: {{ .Values.gateway.config.rate_limiting.fail_open }}
+{{- with .Values.gateway.config.artifacts }}
+{{- if .paths }}
+    artifacts:
+      paths:
+{{- toYaml .paths | nindent 8 }}
+      auth: {{ .auth | quote }}
+      scopes:
+{{- toYaml (.scopes | default (list)) | nindent 8 }}
+      revocation_check: {{ .revocation_check }}
+      max_body_bytes: {{ int .max_body_bytes }}
+{{- if .default_upstream }}
+      default_upstream: {{ .default_upstream | quote }}
+{{- end }}
+{{- end }}
+{{- end }}
     routes:
 {{- toYaml .Values.gateway.config.routes | nindent 6 }}

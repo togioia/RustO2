@@ -2,6 +2,41 @@
 
 All notable changes to RustO2 are documented here.
 
+## [0.3.0] - 2026-11-11
+
+### Added
+
+- `rusto2-synapse`: WSO2 artifact parser and mediation engine extracted into a
+  reusable crate, with `MessageContext`, property scopes, expressions and an
+  async `Transport` abstraction.
+- APIM 4.x `api.yaml` import: context/version, lifecycle state, endpoint config,
+  operations, methods, OAuth2 security and per-operation scopes. OpenAPI 3 with
+  `x-wso2-*` extensions is also supported.
+- Synapse `<api>`, `<resource>`, `<sequence>` and `<endpoint>` XML import with
+  URI templates (`{name}`, final `*`), API/resource defaults, named sequences
+  and named endpoints.
+- CAR (`.car`/ZIP) loading with entry/size limits, explicit unsupported-artifact
+  reporting and support for APIM definitions alongside Synapse configs.
+- Mediation engine: `log`, `property`, `filter`, `switch`, `payloadFactory`,
+  `enrich`, `call`, `send`, `respond`, `header`, `drop`, sequence references and
+  in/out/fault execution.
+- Explicit load-time failures for unsupported mediators, security schemes,
+  endpoint types, WSDL endpoints and non-blocking calls.
+- URI-template route matching with `uri.var.*` properties and method-aware
+  `Allow` responses across native and artifact routes.
+- Demo WSO2 artifacts (`examples/wso2`), a CAR build script, and smoke checks
+  for APIM path/scope/method behaviour and Synapse mediation.
+- `docs/SYNAPSE.md` with the exact supported subset, expressions, semantics and
+  known gaps.
+
+### Changed
+
+- Gateway startup can load artifacts from `artifacts.paths`; native YAML routes
+  keep the streaming proxy, while mediated routes use the buffered mediation
+  path with `artifacts.max_body_bytes`.
+- Admin health now reports loaded WSO2 APIs and artifact sources.
+- Version bumped to 0.3.0 (crate and Helm chart).
+
 ## [0.2.0] - 2026-11-11
 
 ### Added

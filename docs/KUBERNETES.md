@@ -151,6 +151,45 @@ default). `/api` keeps the local-JWKS fast path. Revocation state is held in the
 identity server's memory, so keep `identity.replicaCount: 1` unless you add a
 shared revocation store.
 
+### WSO2 artifacts
+
+The chart can load APIM definitions, Synapse APIs/sequences and CAR files. Put
+the artifacts in a ConfigMap or PVC, mount them into the gateway pod, and list
+the absolute container paths under `gateway.config.artifacts.paths`:
+
+```bash
+kubectl -n rusto2 create configmap rusto2-wso2-artifacts \
+  --from-file=pizzashack-api.yaml=examples/wso2/apim/pizzashack-api.yaml \
+  --from-file=MediationDemo.xml=examples/wso2/synapse/MediationDemo.xml \
+  --from-file=CommonSequences.xml=examples/wso2/synapse/CommonSequences.xml
+```
+
+```yaml
+gateway:
+  config:
+    artifacts:
+      paths:
+        - /etc/rusto2/artifacts/pizzashack-api.yaml
+        - /etc/rusto2/artifacts/MediationDemo.xml
+        - /etc/rusto2/artifacts/CommonSequences.xml
+      auth: jwt
+      max_body_bytes: 2097152
+  extraVolumes:
+    - name: wso2-artifacts
+      configMap:
+        name: rusto2-wso2-artifacts
+  extraVolumeMounts:
+    - name: wso2-artifacts
+      mountPath: /etc/rusto2/artifacts
+      readOnly: true
+```
+
+`examples/wso2/build-car.sh` creates a single `.car`; mount that one file and
+set `artifacts.paths` to its path. Unsupported mediators fail startup, so a bad
+artifact produces a CrashLoopBackOff instead of silently serving a different
+flow. Keep the gateway Deployment rollout healthy while iterating by testing the
+artifact bundle locally first (`cargo test -p rusto2-gw artifact`).
+
 ### Distributed quotas with Redis
 
 The chart does not deploy Redis. To share quotas across gateway replicas, point

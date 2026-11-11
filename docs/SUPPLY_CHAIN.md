@@ -49,7 +49,7 @@ ghcr.io/togioia/rusto2-gw
 ghcr.io/togioia/rusto2-is
 ```
 
-Tags produced by `docker/metadata-action` for a release tag such as `v0.2.0`:
+Tags produced by `docker/metadata-action` for a release tag such as `v0.3.0`:
 
 | Tag | Example | Notes |
 |---|---|---|
@@ -73,7 +73,7 @@ package settings. Private packages work too; authenticate with a token that has
 Dispatch the workflow **on the tag ref**, for example:
 
 ```bash
-gh workflow run release.yml --repo togioia/RustO2 --ref v0.2.0
+gh workflow run release.yml --repo togioia/RustO2 --ref v0.3.0
 ```
 
 The prepare job rejects a branch ref. This is deliberate: the cosign
@@ -98,7 +98,7 @@ The files are:
 Download and inspect them with the GitHub CLI:
 
 ```bash
-gh release download v0.2.0 \
+gh release download v0.3.0 \
   --repo togioia/RustO2 \
   --pattern 'rusto2-*.spdx.json'
 
@@ -129,7 +129,7 @@ https://github.com/<owner>/<repo>/.github/workflows/release.yml@refs/tags/<tag>
 Tags are mutable; verify the digest that was actually signed. For example:
 
 ```bash
-docker buildx imagetools inspect ghcr.io/togioia/rusto2-gw:0.2.0
+docker buildx imagetools inspect ghcr.io/togioia/rusto2-gw:0.3.0
 ```
 
 Use the `Digest:` line from the output, for example
@@ -141,7 +141,7 @@ Replace the digest and tag with the values from the release:
 
 ```bash
 cosign verify \
-  --certificate-identity "https://github.com/togioia/RustO2/.github/workflows/release.yml@refs/tags/v0.2.0" \
+  --certificate-identity "https://github.com/togioia/RustO2/.github/workflows/release.yml@refs/tags/v0.3.0" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
   ghcr.io/togioia/rusto2-gw@sha256:<digest>
 ```

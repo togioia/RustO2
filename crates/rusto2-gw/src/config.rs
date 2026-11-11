@@ -11,6 +11,8 @@ pub struct GatewayConfig {
     #[serde(default)]
     pub rate_limiting: RateLimitingConfig,
     #[serde(default)]
+    pub artifacts: ArtifactsConfig,
+    #[serde(default)]
     pub routes: Vec<RouteConfig>,
 }
 
@@ -125,6 +127,52 @@ pub enum RateLimitStore {
     #[default]
     Memory,
     Redis,
+}
+
+/// WSO2 artifacts imported at startup: APIM API definitions, Synapse XML and
+/// CAR packages. Artifact routes are executed by the mediation engine, not by
+/// the generic streaming proxy.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ArtifactsConfig {
+    #[serde(default)]
+    pub paths: Vec<String>,
+    /// Security applied to Synapse `<api>` resources. APIM definitions carry
+    /// their own `securityScheme`, so this only affects plain Synapse XML.
+    #[serde(default = "default_artifact_auth")]
+    pub auth: AuthMode,
+    #[serde(default)]
+    pub scopes: Vec<String>,
+    #[serde(default)]
+    pub revocation_check: bool,
+    /// Maximum request body buffered for mediated routes. Non-mediated routes
+    /// keep streaming with no fixed limit.
+    #[serde(default = "default_mediation_body")]
+    pub max_body_bytes: usize,
+    /// Endpoint used by `<call>/<send>` without an explicit address and by APIs
+    /// that do not declare one.
+    #[serde(default)]
+    pub default_upstream: Option<String>,
+}
+
+impl Default for ArtifactsConfig {
+    fn default() -> Self {
+        Self {
+            paths: Vec::new(),
+            auth: default_artifact_auth(),
+            scopes: Vec::new(),
+            revocation_check: false,
+            max_body_bytes: default_mediation_body(),
+            default_upstream: None,
+        }
+    }
+}
+
+fn default_artifact_auth() -> AuthMode {
+    AuthMode::Jwt
+}
+
+fn default_mediation_body() -> usize {
+    2 * 1024 * 1024
 }
 
 fn default_redis_url() -> String {
@@ -328,8 +376,18 @@ impl GatewayConfig {
         if self.server.connect_timeout_secs == 0 {
             bail!("server.connect_timeout_secs must be greater than zero");
         }
-        if self.routes.is_empty() {
-            bail!("at least one route must be configured");
+        if self.routes.is_empty() && self.artifacts.paths.is_empty() {
+            bail!("at least one route must be configured (routes or artifacts.paths)");
+        }
+        if self.artifacts.max_body_bytes == 0 {
+            bail!("artifacts.max_body_bytes must be greater than zero");
+        }
+        if let Some(upstream) = &self.artifacts.default_upstream {
+            let upstream = reqwest::Url::parse(upstream)
+                .context("artifacts.default_upstream must be an absolute URL")?;
+            if !matches!(upstream.scheme(), "http" | "https") || upstream.host().is_none() {
+                bail!("artifacts.default_upstream must be an absolute http(s) URL");
+            }
         }
 
         let issuer = reqwest::Url::parse(&self.identity.issuer)

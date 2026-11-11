@@ -1,0 +1,27 @@
+[package]
+name = "rusto2-synapse"
+description = "WSO2 Synapse artifact parser and mediation engine used by RustO2"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+http.workspace = true
+regex.workspace = true
+roxmltree.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+url.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio.workspace = true

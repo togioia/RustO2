@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 use axum::{
     extract::{Request, State},
@@ -15,7 +15,7 @@ use serde::Deserialize;
 use crate::{
     config::AuthMode,
     http_util::json_error,
-    routes::{self, CompiledRoute, MatchedRoute},
+    routes::{self, CompiledRoute, MatchedRoute, RouteMatch},
     state::AppState,
 };
 
@@ -107,25 +107,27 @@ pub async fn security_middleware(
         return next.run(request).await;
     }
 
-    let Some(route) = routes::find(&state.routes, &path).cloned() else {
-        return json_error(
-            StatusCode::NOT_FOUND,
-            "not_found",
-            "no route matches this path",
-        );
-    };
-
-    if !route.allows(request.method()) {
-        let mut response = json_error(
-            StatusCode::METHOD_NOT_ALLOWED,
-            "method_not_allowed",
-            "this method is not allowed by the route policy",
-        );
-        if let Ok(value) = HeaderValue::from_str(&route.allow_header) {
-            response.headers_mut().insert(ALLOW, value);
+    let (route, captures) = match routes::find(&state.routes, &path, request.method()) {
+        RouteMatch::Found { route, captures } => (Arc::clone(route), captures),
+        RouteMatch::MethodNotAllowed { allow } => {
+            let mut response = json_error(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "method_not_allowed",
+                "this method is not allowed by the route policy",
+            );
+            if let Ok(value) = HeaderValue::from_str(&allow) {
+                response.headers_mut().insert(ALLOW, value);
+            }
+            return response;
         }
-        return response;
-    }
+        RouteMatch::NotFound => {
+            return json_error(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "no route matches this path",
+            );
+        }
+    };
 
     let auth = match route.cfg.auth.mode {
         AuthMode::None => AuthContext::default(),
@@ -148,7 +150,9 @@ pub async fn security_middleware(
         },
     };
 
-    request.extensions_mut().insert(MatchedRoute(route));
+    request
+        .extensions_mut()
+        .insert(MatchedRoute { route, captures });
     request.extensions_mut().insert(auth);
     next.run(request).await
 }

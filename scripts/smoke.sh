@@ -60,6 +60,43 @@ pass "required scope is enforced"
   || fail "read scope was rejected on the read route"
 pass "granted scope is accepted"
 
+# WSO2 artifact compatibility: APIM api.yaml and a Synapse <api> with an
+# in/out/fault sequence. The external path shape is /context/version/resource.
+[ "$(status -H "Authorization: Bearer $TOKEN" "$BASE_URL/pizzashack/1.0.0/get")" = "200" ] \
+  || fail "APIM API definition route did not return 200"
+pass "APIM API definition route works"
+
+[ "$(status -X POST -H "Authorization: Bearer $TOKEN" "$BASE_URL/pizzashack/1.0.0/get")" = "405" ] \
+  || fail "APIM operation method allowlist was not enforced"
+pass "APIM operation method is enforced"
+
+[ "$(status -X POST -H "Authorization: Bearer $READONLY_TOKEN" "$BASE_URL/pizzashack/1.0.0/post")" = "403" ] \
+  || fail "APIM operation scope was not enforced"
+pass "APIM operation scope is enforced"
+
+DEMO_BODY=$(curl -sS -H "Authorization: Bearer $TOKEN" "$BASE_URL/demo/1.0.0/items/42")
+echo "$DEMO_BODY" | grep -q '"id":"42"' \
+  || fail "Synapse payloadFactory did not receive the path parameter"
+echo "$DEMO_BODY" | grep -q '"kind":"special"' \
+  || fail "Synapse filter did not run the then branch"
+echo "$DEMO_BODY" | grep -q '"hit":"answer"' \
+  || fail "Synapse switch did not run the matching case"
+pass "Synapse property, filter, switch, enrich and payloadFactory work"
+
+DEMO_HEADERS=$(curl -sS -D - -o /dev/null -H "Authorization: Bearer $TOKEN" \
+  "$BASE_URL/demo/1.0.0/items/42")
+echo "$DEMO_HEADERS" | grep -qi '^x-mediated: synapse' \
+  || fail "Synapse outSequence header was not applied"
+pass "Synapse outSequence is applied"
+
+[ "$(status -H "Authorization: Bearer $TOKEN" "$BASE_URL/demo/1.0.0/anything/foo")" = "200" ] \
+  || fail "Synapse call/outSequence route did not return 200"
+DEMO_HEADERS=$(curl -sS -D - -o /dev/null -H "Authorization: Bearer $TOKEN" \
+  "$BASE_URL/demo/1.0.0/anything/foo")
+echo "$DEMO_HEADERS" | grep -qi '^x-out-sequence: true' \
+  || fail "Synapse outSequence header was not applied after call"
+pass "Synapse call, named endpoint and outSequence work"
+
 # Introspection and revocation. Use a throw-away token so the main token can
 # still be used by the circuit-breaker test below.
 REVOKE_TOKEN=$(curl -sS -X POST "$IS_URL/oauth2/token" \

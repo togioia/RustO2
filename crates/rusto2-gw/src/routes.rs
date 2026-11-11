@@ -2,15 +2,24 @@ use std::sync::Arc;
 
 use anyhow::{bail, Context};
 use http::Method;
+use rusto2_synapse::{template::PathPattern, MediationPlan};
 
-use crate::config::{GatewayConfig, RouteConfig};
+use crate::{
+    artifact::ArtifactRoute,
+    config::{GatewayConfig, RouteConfig},
+};
 
 /// A route with its policy compiled into runtime-friendly types.
 #[derive(Debug)]
 pub struct CompiledRoute {
     pub cfg: RouteConfig,
     pub methods: Vec<Method>,
-    pub allow_header: String,
+    /// Synapse URI-template for routes imported from WSO2 artifacts. Plain YAML
+    /// routes use prefix matching instead.
+    pub pattern: Option<PathPattern>,
+    /// Present on artifact routes: the resource must be executed by the
+    /// Synapse mediation engine.
+    pub mediation: Option<Arc<MediationPlan>>,
 }
 
 impl CompiledRoute {
@@ -22,10 +31,34 @@ impl CompiledRoute {
 }
 
 #[derive(Clone)]
-pub struct MatchedRoute(pub Arc<CompiledRoute>);
+pub struct MatchedRoute {
+    pub route: Arc<CompiledRoute>,
+    pub captures: Vec<(String, String)>,
+}
 
-pub fn compile(config: &GatewayConfig) -> anyhow::Result<Vec<Arc<CompiledRoute>>> {
-    let mut routes = Vec::with_capacity(config.routes.len());
+/// Result of matching a request against the route table.
+pub enum RouteMatch<'a> {
+    Found {
+        route: &'a Arc<CompiledRoute>,
+        captures: Vec<(String, String)>,
+    },
+    MethodNotAllowed {
+        allow: String,
+    },
+    NotFound,
+}
+
+type BestMatch<'a> = (usize, &'a Arc<CompiledRoute>, Vec<(String, String)>);
+
+/// Compile YAML routes and WSO2 artifact routes into one matcher. Artifact
+/// templates carry a higher specificity than prefix routes, so a Synapse
+/// resource such as `/pizzashack/1.0.0/menu/{id}` wins over a generic `/pizzashack`
+/// prefix.
+pub fn compile_all(
+    config: &GatewayConfig,
+    artifacts: &[ArtifactRoute],
+) -> anyhow::Result<Vec<Arc<CompiledRoute>>> {
+    let mut routes = Vec::with_capacity(config.routes.len() + artifacts.len());
 
     for route in &config.routes {
         let mut methods = Vec::with_capacity(route.methods.len());
@@ -34,12 +67,6 @@ pub fn compile(config: &GatewayConfig) -> anyhow::Result<Vec<Arc<CompiledRoute>>
                 .with_context(|| format!("invalid HTTP method {method}"))?;
             methods.push(method);
         }
-        let allow_header = methods
-            .iter()
-            .map(Method::as_str)
-            .collect::<Vec<_>>()
-            .join(", ");
-
         if methods.is_empty() {
             bail!("route {} has no methods", route.name);
         }
@@ -47,28 +74,120 @@ pub fn compile(config: &GatewayConfig) -> anyhow::Result<Vec<Arc<CompiledRoute>>
         routes.push(Arc::new(CompiledRoute {
             cfg: route.clone(),
             methods,
-            allow_header,
+            pattern: None,
+            mediation: None,
         }));
     }
 
-    // Longest prefix wins, so /api/v2 is selected before /api.
-    routes.sort_by_key(|route| std::cmp::Reverse(route.cfg.prefix.len()));
+    for (index, route) in artifacts.iter().enumerate() {
+        let method = Method::from_bytes(route.method.to_uppercase().as_bytes())
+            .with_context(|| format!("artifact route {} has an invalid method", route.name))?;
+        let pattern = PathPattern::parse(&route.full_path).with_context(|| {
+            format!(
+                "artifact route {} has an invalid URI template {}",
+                route.name, route.full_path
+            )
+        })?;
+
+        if routes.iter().any(|existing| {
+            existing.cfg.name == route.name
+                || existing
+                    .pattern
+                    .as_ref()
+                    .is_some_and(|other| other.source() == pattern.source())
+                    && existing.methods.contains(&method)
+        }) {
+            bail!(
+                "artifact route {} ({}) is declared more than once",
+                route.name,
+                route.full_path
+            );
+        }
+
+        let cfg = RouteConfig {
+            name: format!("{}_{}", route.name, index),
+            prefix: route.api_path.clone(),
+            upstream: route.upstream.clone(),
+            strip_prefix: true,
+            methods: vec![route.method.clone()],
+            auth: route.auth.clone(),
+            rate_limit: route.rate_limit.clone(),
+            circuit_breaker: None,
+        };
+
+        routes.push(Arc::new(CompiledRoute {
+            cfg,
+            methods: vec![method],
+            pattern: Some(pattern),
+            mediation: Some(route.plan.clone()),
+        }));
+    }
+
+    // Specificity: artifact templates outrank prefix routes; among prefix
+    // routes the longest one wins.
+    routes.sort_by_key(|route| {
+        std::cmp::Reverse(match &route.pattern {
+            Some(pattern) => pattern.specificity(),
+            None => route.cfg.prefix.len(),
+        })
+    });
     Ok(routes)
 }
 
-pub fn find<'a>(routes: &'a [Arc<CompiledRoute>], path: &str) -> Option<&'a Arc<CompiledRoute>> {
-    routes.iter().find(|route| {
-        let prefix = route.cfg.prefix.as_str();
-        if prefix == "/" {
-            return true;
+/// Match a path and method. Artifact templates match exactly (with path
+/// parameters), prefix routes keep the original segment-boundary semantics.
+pub fn find<'a>(routes: &'a [Arc<CompiledRoute>], path: &str, method: &Method) -> RouteMatch<'a> {
+    let mut best: Option<BestMatch<'a>> = None;
+    let mut allow = std::collections::BTreeSet::new();
+
+    for route in routes {
+        let (matched, captures, score) = match &route.pattern {
+            Some(pattern) => match pattern.matches(path) {
+                Some(captures) => (true, captures, pattern.specificity()),
+                None => (false, Vec::new(), 0),
+            },
+            None => (
+                prefix_matches(&route.cfg.prefix, path),
+                Vec::new(),
+                route.cfg.prefix.len(),
+            ),
+        };
+        if !matched {
+            continue;
         }
-        if path == prefix {
-            return true;
+
+        if route.allows(method) {
+            if best
+                .as_ref()
+                .is_none_or(|(best_score, ..)| score > *best_score)
+            {
+                best = Some((score, route, captures));
+            }
+        } else {
+            for allowed in &route.methods {
+                allow.insert(allowed.as_str().to_owned());
+            }
+            if route.methods.contains(&Method::GET) {
+                allow.insert(Method::HEAD.as_str().to_owned());
+            }
         }
-        path.strip_prefix(prefix)
-            .map(|rest| rest.starts_with('/'))
-            .unwrap_or(false)
-    })
+    }
+
+    match best {
+        Some((_, route, captures)) => RouteMatch::Found { route, captures },
+        None if !allow.is_empty() => RouteMatch::MethodNotAllowed {
+            allow: allow.into_iter().collect::<Vec<_>>().join(", "),
+        },
+        None => RouteMatch::NotFound,
+    }
+}
+
+fn prefix_matches(prefix: &str, path: &str) -> bool {
+    prefix == "/"
+        || path == prefix
+        || path
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('/'))
 }
 
 #[cfg(test)]
@@ -88,17 +207,25 @@ mod tests {
                 circuit_breaker: None,
             },
             methods: vec![Method::GET],
-            allow_header: "GET".to_owned(),
+            pattern: None,
+            mediation: None,
         })
+    }
+
+    fn matched<'a>(routes: &'a [Arc<CompiledRoute>], path: &str) -> Option<&'a Arc<CompiledRoute>> {
+        match find(routes, path, &Method::GET) {
+            RouteMatch::Found { route, .. } => Some(route),
+            _ => None,
+        }
     }
 
     #[test]
     fn matches_segment_boundaries_only() {
         let routes = vec![route("api", "/api")];
-        assert!(find(&routes, "/api").is_some());
-        assert!(find(&routes, "/api/get").is_some());
-        assert!(find(&routes, "/apix").is_none());
-        assert!(find(&routes, "/other").is_none());
+        assert!(matched(&routes, "/api").is_some());
+        assert!(matched(&routes, "/api/get").is_some());
+        assert!(matched(&routes, "/apix").is_none());
+        assert!(matched(&routes, "/other").is_none());
     }
 
     #[test]
@@ -107,8 +234,85 @@ mod tests {
         // compile() sorts, so emulate the sort here.
         let mut routes = routes;
         routes.sort_by_key(|route| std::cmp::Reverse(route.cfg.prefix.len()));
-        let matched = find(&routes, "/api/v2/users").expect("match");
+        let matched = matched(&routes, "/api/v2/users").expect("match");
         assert_eq!(matched.cfg.name, "v2");
+    }
+
+    #[test]
+    fn method_mismatch_reports_allow() {
+        let routes = vec![route("api", "/api")];
+        match find(&routes, "/api/get", &Method::POST) {
+            RouteMatch::MethodNotAllowed { allow } => assert_eq!(allow, "GET, HEAD"),
+            _ => panic!("expected method not allowed"),
+        }
+    }
+
+    #[test]
+    fn uri_template_routes_outrank_prefix_routes() {
+        use std::collections::HashMap;
+
+        let mut config = crate::config::GatewayConfig {
+            server: Default::default(),
+            identity: crate::config::IdentityConfig {
+                issuer: "http://issuer".into(),
+                audience: "rusto2".into(),
+                jwks_url: "http://issuer/jwks".into(),
+                refresh_secs: 300,
+                leeway_secs: 15,
+                introspection_url: None,
+                introspection_client_id: None,
+                introspection_client_secret: None,
+                revocation_cache_secs: 5,
+                revocation_fail_open: true,
+            },
+            rate_limiting: Default::default(),
+            artifacts: Default::default(),
+            routes: Vec::new(),
+        };
+        config.routes.push(RouteConfig {
+            name: "prefix".to_owned(),
+            prefix: "/pizzashack".to_owned(),
+            upstream: "http://backend".to_owned(),
+            strip_prefix: true,
+            methods: vec!["GET".to_owned()],
+            auth: Default::default(),
+            rate_limit: None,
+            circuit_breaker: None,
+        });
+
+        let artifact = ArtifactRoute {
+            name: "menu".to_owned(),
+            api_name: "PizzaShackAPI".to_owned(),
+            api_path: "/pizzashack/1.0.0".to_owned(),
+            full_path: "/pizzashack/1.0.0/menu/{id}".to_owned(),
+            method: "GET".to_owned(),
+            upstream: "http://backend".to_owned(),
+            auth: Default::default(),
+            rate_limit: None,
+            plan: Arc::new(MediationPlan {
+                name: "PizzaShackAPI /menu/{id}".to_owned(),
+                api_path: "/pizzashack/1.0.0".to_owned(),
+                default_upstream: Some("http://backend".to_owned()),
+                in_sequence: rusto2_synapse::Sequence::default(),
+                out_sequence: rusto2_synapse::Sequence::default(),
+                fault_sequence: rusto2_synapse::Sequence::default(),
+                named_sequences: HashMap::new(),
+                endpoints: HashMap::new(),
+            }),
+        };
+        let routes = compile_all(&config, &[artifact]).expect("compile");
+
+        match find(&routes, "/pizzashack/1.0.0/menu/7", &Method::GET) {
+            RouteMatch::Found { route, captures } => {
+                assert!(route.pattern.is_some());
+                assert_eq!(captures, vec![("id".to_owned(), "7".to_owned())]);
+            }
+            _ => panic!("expected the URI-template route"),
+        }
+        match find(&routes, "/pizzashack/1.0.0/menu/7", &Method::POST) {
+            RouteMatch::MethodNotAllowed { allow } => assert_eq!(allow, "GET, HEAD"),
+            _ => panic!("expected method not allowed"),
+        }
     }
 
     #[test]
@@ -143,8 +347,16 @@ mod property_tests {
         Arc::new(CompiledRoute {
             cfg: route_config(prefix),
             methods: vec![Method::GET, Method::POST],
-            allow_header: "GET, POST".to_owned(),
+            pattern: None,
+            mediation: None,
         })
+    }
+
+    fn matched<'a>(routes: &'a [Arc<CompiledRoute>], path: &str) -> Option<&'a Arc<CompiledRoute>> {
+        match find(routes, path, &Method::GET) {
+            RouteMatch::Found { route, .. } => Some(route),
+            _ => None,
+        }
     }
 
     /// Reproduce the ordering that `compile` applies: longest prefix first.
@@ -183,6 +395,7 @@ mod property_tests {
                 revocation_fail_open: true,
             },
             rate_limiting: Default::default(),
+            artifacts: Default::default(),
             routes: prefixes
                 .into_iter()
                 .enumerate()
@@ -203,7 +416,7 @@ mod property_tests {
             path in any::<String>(),
         ) {
             let routes = vec![compiled(&prefix)];
-            let actual = find(&routes, &path).is_some();
+            let actual = matched(&routes, &path).is_some();
             let expected = reference_matches(&prefix, &path);
             prop_assert_eq!(
                 actual,
@@ -222,7 +435,7 @@ mod property_tests {
         ) {
             let routes = sorted(prefixes);
 
-            match find(&routes, &path) {
+            match matched(&routes, &path) {
                 Some(matched) => {
                     let matched_len = matched.cfg.prefix.len();
                     prop_assert!(
@@ -266,7 +479,7 @@ mod property_tests {
             prefixes.push("/".to_owned());
             let routes = sorted(prefixes);
             prop_assert!(
-                find(&routes, &path).is_some(),
+                matched(&routes, &path).is_some(),
                 "root route did not match path {:?}",
                 path,
             );
@@ -278,7 +491,7 @@ mod property_tests {
         fn compile_sorts_routes_and_normalises_methods(
             prefixes in prop::collection::vec(any::<String>(), 1..12),
         ) {
-            let routes = compile(&config_with(prefixes.clone())).expect("compile");
+            let routes = compile_all(&config_with(prefixes.clone()), &[]).expect("compile");
 
             prop_assert_eq!(routes.len(), prefixes.len());
             for pair in routes.windows(2) {
@@ -287,7 +500,7 @@ mod property_tests {
             for route in &routes {
                 prop_assert!(route.allows(&Method::GET));
                 prop_assert!(route.allows(&Method::POST));
-                prop_assert_eq!(route.allow_header.as_str(), "GET, POST");
+                prop_assert_eq!(route.methods.len(), 2);
             }
         }
 
@@ -297,9 +510,9 @@ mod property_tests {
             prefixes in prop::collection::vec(any::<String>(), 1..10),
             path in any::<String>(),
         ) {
-            let routes = compile(&config_with(prefixes)).expect("compile");
+            let routes = compile_all(&config_with(prefixes), &[]).expect("compile");
 
-            match find(&routes, &path) {
+            match matched(&routes, &path) {
                 Some(matched) => {
                     let matched_len = matched.cfg.prefix.len();
                     prop_assert!(reference_matches(&matched.cfg.prefix, &path));

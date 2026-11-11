@@ -6,7 +6,11 @@ use axum::{
     response::Response,
 };
 
-use crate::{routes, security::is_internal_path, state::AppState};
+use crate::{
+    routes::{self, RouteMatch},
+    security::is_internal_path,
+    state::AppState,
+};
 
 /// Records request counters, latency histograms and in-flight gauge for every
 /// path, including rejected requests. The scrape endpoint itself is excluded so
@@ -24,9 +28,10 @@ pub async fn metrics_middleware(
     let route_label = if is_internal_path(&path) {
         "internal".to_owned()
     } else {
-        routes::find(&state.routes, &path)
-            .map(|route| route.cfg.name.clone())
-            .unwrap_or_else(|| "unmatched".to_owned())
+        match routes::find(&state.routes, &path, request.method()) {
+            RouteMatch::Found { route, .. } => route.cfg.name.clone(),
+            _ => "unmatched".to_owned(),
+        }
     };
     let method = request.method().as_str().to_owned();
 

@@ -17,12 +17,14 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates/rusto2-common/Cargo.toml crates/rusto2-common/Cargo.toml
 COPY crates/rusto2-gw/Cargo.toml crates/rusto2-gw/Cargo.toml
 COPY crates/rusto2-is/Cargo.toml crates/rusto2-is/Cargo.toml
+COPY crates/rusto2-synapse/Cargo.toml crates/rusto2-synapse/Cargo.toml
 
 # Cache dependency compilation with a throw-away workspace.
-RUN mkdir -p crates/rusto2-common/src crates/rusto2-gw/src crates/rusto2-is/src \
+RUN mkdir -p crates/rusto2-common/src crates/rusto2-gw/src crates/rusto2-is/src crates/rusto2-synapse/src \
     && echo 'pub fn placeholder() {}' > crates/rusto2-common/src/lib.rs \
     && echo 'fn main() {}' > crates/rusto2-gw/src/main.rs \
     && echo 'fn main() {}' > crates/rusto2-is/src/main.rs \
+    && echo 'pub fn placeholder() {}' > crates/rusto2-synapse/src/lib.rs \
     && cargo build --release --target x86_64-unknown-linux-musl -p rusto2-is
 
 COPY crates ./crates

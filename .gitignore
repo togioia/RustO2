@@ -1,4 +1,5 @@
 /target
+examples/wso2/*.car
 /data
 *.log
 .env

@@ -78,6 +78,20 @@ curl -sS -o /dev/null -w 'HTTP %{http_code}\n' \
   -H "Authorization: Bearer $READONLY_TOKEN" \
   "$BASE_URL/admin/get"
 
+bold "WSO2 APIM artifact: GET /pizzashack/1.0.0/get"
+curl -sS -o /dev/null -w 'HTTP %{http_code}\n' \
+  -H "Authorization: Bearer $TOKEN" \
+  "$BASE_URL/pizzashack/1.0.0/get"
+
+bold "WSO2 Synapse mediation: GET /demo/1.0.0/items/42"
+curl -sS -H "Authorization: Bearer $TOKEN" \
+  "$BASE_URL/demo/1.0.0/items/42"
+printf '\n'
+
+bold "WSO2 Synapse call + outSequence: GET /demo/1.0.0/anything/foo"
+curl -sS -D - -o /dev/null -H "Authorization: Bearer $TOKEN" \
+  "$BASE_URL/demo/1.0.0/anything/foo" | grep -iE '^(HTTP/|x-out-sequence:)'
+
 bold "Rate limiting: 40 rapid calls on /public (limit is 10 rps, burst 10)"
 blocked=0
 for _ in $(seq 1 40); do

@@ -26,6 +26,21 @@ rate_limiting:
   key_prefix: "rusto2:ratelimit:"
   fail_open: true
 
+# WSO2 artifacts imported at startup. Each resource becomes a route and is
+# executed by the Synapse mediation engine (not by the streaming proxy).
+# Set RUSTO2_ARTIFACTS_DIR in containers to the mounted artifact directory.
+artifacts:
+  paths:
+    - ${RUSTO2_ARTIFACTS_DIR:-./examples/wso2}/apim
+    - ${RUSTO2_ARTIFACTS_DIR:-./examples/wso2}/synapse
+  # Security for plain Synapse <api> resources. APIM definitions carry their
+  # own securityScheme and per-operation scopes.
+  auth: jwt
+  scopes: []
+  revocation_check: false
+  max_body_bytes: 2097152
+  default_upstream: http://httpbin:8080
+
 routes:
   # Protected route: JWT required, "read" scope, per-client token bucket and
   # circuit breaker around the httpbin backend.

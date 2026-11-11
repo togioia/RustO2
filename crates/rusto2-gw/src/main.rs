@@ -1,4 +1,5 @@
 mod admin;
+mod artifact;
 mod circuit_breaker;
 mod config;
 mod http_util;
