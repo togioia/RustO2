@@ -1,0 +1,36 @@
+name: Feature request
+description: Suggest an improvement or a new capability
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What are you trying to do, and what gets in the way?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How do you imagine it working? Alternatives you considered are also useful.
+    validations:
+      required: true
+  - type: dropdown
+    id: parity
+    attributes:
+      label: Related to WSO2 parity?
+      description: See docs/WSO2_PARITY.md for the roadmap.
+      options:
+        - "No"
+        - "Yes, it is in the parity roadmap"
+        - "Yes, it is a new parity gap"
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and discussions.
+          required: true

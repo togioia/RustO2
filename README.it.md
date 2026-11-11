@@ -124,5 +124,12 @@ RustO2 è un proof of concept e un portfolio project, non un prodotto pronto per
 la produzione. Le credenziali demo sono pubbliche e vanno sostituite. Vedi
 [SECURITY.md](SECURITY.md).
 
+## Contribuire
+
+I contributi sono benvenuti. Leggi [CONTRIBUTING.md](CONTRIBUTING.md) per il
+flusso di sviluppo e il [Codice di condotta](CODE_OF_CONDUCT.md) prima di
+partecipare. Le vulnerabilità di sicurezza vanno segnalate in privato, come
+descritto in [SECURITY.md](SECURITY.md).
+
 Licenza: [Apache-2.0](LICENSE). WSO2 è un marchio di WSO2 LLC; RustO2 non è
 affiliato a WSO2.

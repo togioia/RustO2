@@ -755,4 +755,11 @@ Supporting platform work, lower priority until M1–M3 are credible:
 Apache-2.0. RustO2 is an independent project and is not affiliated with WSO2
 LLC; see [NOTICE](NOTICE).
 
-<p align="center"><sub>Built as a seven-day proof that a WSO2-style gateway core can be small, fast and pleasant to operate.</sub></p>
+## Contributing
+
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the
+development workflow and the [Code of Conduct](CODE_OF_CONDUCT.md) before
+participating. Security issues must be reported privately, as described in
+[SECURITY.md](SECURITY.md).
+
+<p align="center"><sub>A focused, cloud-native take on the core of a WSO2-style API gateway.</sub></p>

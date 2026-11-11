@@ -1,0 +1,59 @@
+name: Bug report
+description: Report a reproducible problem in RustO2
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. For security issues, do not use this form;
+        see SECURITY.md instead.
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the problem and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps, configuration, or request examples that reproduce the problem.
+      placeholder: |
+        1. Start the stack with `make up`
+        2. Send `curl ...`
+        3. Observe ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: RustO2 version or commit
+      placeholder: "v0.3.0 or a commit SHA"
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - rusto2-gw (gateway)
+        - rusto2-is (identity server)
+        - rusto2-synapse (WSO2 artifacts / mediation)
+        - Docker / Compose
+        - Helm / Kubernetes
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Rust version, Docker version, Kubernetes version, etc.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant log output. Remove secrets and tokens before pasting.
+      render: shell
