@@ -55,7 +55,7 @@ Rust stack.
 
 ### Feature checklist
 
-- [x] Per-route allowlisted methods, upstream, strip-prefix and timeout policies
+- [x] Per-route allowlisted methods, upstream and strip-prefix policies
 - [x] Streaming request/response proxying with connection pooling
 - [x] `X-Forwarded-For`, `X-Forwarded-Host`, `X-Forwarded-Proto`
 - [x] `X-RustO2-Request-Id` + `X-Request-Id` correlation end to end
@@ -209,6 +209,11 @@ x-rusto2-request-id: 0192f0a1-7c3e-7b1a-9a2e-5f2b1c3d4e5f
 curl -i http://localhost:8080/api/get
 
 # 403: read-only client on a write-scoped route
+READONLY_TOKEN=$(curl -s -X POST http://localhost:9000/oauth2/token \
+  -d "grant_type=client_credentials" \
+  -d "client_id=readonly-client" \
+  -d "client_secret=readonly-secret" \
+  | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
 curl -i -H "Authorization: Bearer $READONLY_TOKEN" \
   http://localhost:8080/admin/get
 
@@ -469,9 +474,9 @@ rusto2-is.yaml     clients, issuer, key location
 - **Streaming, not buffering.** `reqwest::Body::wrap_stream` and
   `Body::from_stream` keep memory flat even for large payloads. The gateway does
   not retry non-idempotent requests.
-- **Latency measured by oha is time-to-first-byte.** Streaming responses are not
-  consumed by the gateway's latency histogram; Prometheus records the time until
-  upstream response headers arrive.
+- **Latency accounting.** The gateway's Prometheus histogram stops when the
+  upstream response headers arrive; oha measures the full request/response cycle.
+  Both are useful, but they are not the same number.
 - **Ed25519 only.** The JWKS filter deliberately rejects non-EdDSA keys to avoid
   algorithm-confusion attacks. RSA support would be a small extension.
 - **Single identity-server key.** Key rotation is supported through the JWKS
