@@ -104,6 +104,27 @@ go-httpbin  19,232 KiB
 
 Idle RSS before the run: gateway 5,472 KiB, identity 4,216 KiB.
 
+## GitHub Actions benchmark (v0.3.0)
+
+Artifact `benchmark-43080008283` from the v0.3.0 release run:
+
+```text
+Requests/sec: 5,374.04
+50.00% in 23.23 ms
+99.00% in 44.48 ms
+[200] 80,515 responses
+
+Baseline direct httpbin: 17,731.40 req/s
+Gateway memory: 12.96 MiB
+Identity memory: 1.82 MiB
+```
+
+The shared GitHub runner was visibly noisier than the v0.2.0 run (baseline
+17.7k versus 30.6k req/s), so the absolute gateway number is not comparable
+across releases. It is kept as a reproducible release artifact rather than a
+headline. The native static-binary runs above remain the least noisy local
+measurement.
+
 ## GitHub Actions benchmark (v0.2.0)
 
 The release `Benchmark` workflow ran the containerized stack on an Ubuntu
