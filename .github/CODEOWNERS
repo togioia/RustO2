@@ -1,0 +1,8 @@
+# Default owner for everything in the repository
+*                       @togioia
+
+# Security-sensitive code and policy
+/crates/rusto2-is/      @togioia
+/SECURITY.md            @togioia
+/deny.toml              @togioia
+/.github/workflows/     @togioia
