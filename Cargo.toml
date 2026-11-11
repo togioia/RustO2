@@ -1,0 +1,53 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/rusto2-common",
+    "crates/rusto2-is",
+    "crates/rusto2-gw",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "Apache-2.0"
+repository = "https://github.com/togioia/RustO2"
+authors = ["Tommaso Gioia"]
+
+[workspace.dependencies]
+anyhow = "1.0"
+axum = { version = "0.8.9", features = ["http2"] }
+base64 = "0.22"
+bytes = "1"
+dashmap = "6.2"
+futures-util = "0.3"
+http = "1"
+jsonwebtoken = "9.3.1"
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.16.2", default-features = false }
+mimalloc = { version = "0.1", default-features = false }
+pem = "3.0"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "stream", "json"] }
+ring = "0.17"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_urlencoded = "0.7"
+serde_yaml = "0.9"
+sha2 = "0.10"
+subtle = "2.6"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1.45", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+uuid = { version = "1", features = ["v7", "serde"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[profile.dev]
+opt-level = 0

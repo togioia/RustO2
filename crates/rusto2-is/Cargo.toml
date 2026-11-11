@@ -1,0 +1,39 @@
+[package]
+name = "rusto2-is"
+description = "RustO2 Identity Server - OAuth2 client credentials and Ed25519 JWKS"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "rusto2-is"
+path = "src/main.rs"
+
+[dependencies]
+rusto2-common = { path = "../rusto2-common" }
+
+anyhow.workspace = true
+axum.workspace = true
+base64.workspace = true
+bytes.workspace = true
+jsonwebtoken.workspace = true
+metrics.workspace = true
+mimalloc.workspace = true
+metrics-exporter-prometheus.workspace = true
+pem.workspace = true
+ring.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_urlencoded.workspace = true
+serde_yaml.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

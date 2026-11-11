@@ -1,0 +1,12 @@
+apiVersion: 1
+
+providers:
+  - name: RustO2
+    orgId: 1
+    folder: RustO2
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards

@@ -1,0 +1,34 @@
+[package]
+name = "rusto2-gw"
+description = "RustO2 API Gateway - streaming reverse proxy with JWT security, rate limiting and circuit breaking"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "rusto2-gw"
+path = "src/main.rs"
+
+[dependencies]
+rusto2-common = { path = "../rusto2-common" }
+
+anyhow.workspace = true
+axum.workspace = true
+bytes.workspace = true
+dashmap.workspace = true
+futures-util.workspace = true
+http.workspace = true
+jsonwebtoken.workspace = true
+metrics.workspace = true
+mimalloc.workspace = true
+metrics-exporter-prometheus.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true

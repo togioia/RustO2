@@ -1,0 +1,18 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: rusto2-gateway
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["rusto2-gw:8080"]
+
+  - job_name: rusto2-identity
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["rusto2-is:9000"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="RustO2 logo">
+  <defs>
+    <linearGradient id="bg" x1="32" y1="24" x2="480" y2="488" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0A1220"/>
+      <stop offset="1" stop-color="#132441"/>
+    </linearGradient>
+    <linearGradient id="warm" x1="300" y1="150" x2="430" y2="360" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFB347"/>
+      <stop offset="1" stop-color="#FF6B3D"/>
+    </linearGradient>
+    <linearGradient id="cool" x1="80" y1="360" x2="260" y2="150" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#38BDF8"/>
+      <stop offset="1" stop-color="#5EEAD4"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="translate(256 246) rotate(90) scale(220)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2DD4BF" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#2DD4BF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="116" fill="url(#bg)"/>
+  <rect width="512" height="512" rx="116" fill="url(#glow)"/>
+
+  <path d="M256 64L422 160V352L256 448L90 352V160L256 64Z" stroke="url(#cool)" stroke-opacity="0.32" stroke-width="14"/>
+  <path d="M256 96L395 176V336L256 416L117 336V176L256 96Z" stroke="#FFFFFF" stroke-opacity="0.06" stroke-width="2"/>
+
+  <path d="M78 256H142" stroke="url(#cool)" stroke-width="14" stroke-linecap="round"/>
+  <circle cx="150" cy="256" r="10" fill="#5EEAD4"/>
+  <path d="M370 256H428" stroke="url(#warm)" stroke-width="14" stroke-linecap="round"/>
+  <path d="M404 232L428 256L404 280" stroke="url(#warm)" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <text x="214" y="332" text-anchor="middle" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="238" font-weight="800" letter-spacing="-14" fill="#F8FAFC">R</text>
+  <text x="356" y="318" text-anchor="middle" font-family="Inter, 'Segoe UI', Arial, sans-serif" font-size="152" font-weight="800" fill="url(#warm)">2</text>
+
+  <circle cx="150" cy="256" r="3" fill="#0A1220"/>
+</svg>

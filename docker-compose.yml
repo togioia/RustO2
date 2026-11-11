@@ -1,0 +1,98 @@
+name: rusto2
+
+services:
+  rusto2-is:
+    build:
+      context: .
+      dockerfile: docker/identity.Dockerfile
+    image: rusto2-is:dev
+    environment:
+      RUSTO2_CONFIG: /etc/rusto2/rusto2-is.yaml
+      RUSTO2_KEY_PATH: /data/ed25519.pem
+      RUSTO2_ISSUER: http://localhost:9000
+      RUSTO2_DEMO_SECRET: ${RUSTO2_DEMO_SECRET:-demo-secret}
+      RUSTO2_READONLY_SECRET: ${RUSTO2_READONLY_SECRET:-readonly-secret}
+      RUST_LOG: info,rusto2_is=debug
+      MIMALLOC_PURGE_DELAY: "0"
+      MIMALLOC_ARENA_EAGER_COMMIT: "0"
+    volumes:
+      - ./rusto2-is.yaml:/etc/rusto2/rusto2-is.yaml:ro
+      - rusto2-keys:/data
+    ports:
+      - "9000:9000"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  rusto2-gw:
+    build:
+      context: .
+      dockerfile: docker/gateway.Dockerfile
+    image: rusto2-gw:dev
+    environment:
+      RUSTO2_CONFIG: /etc/rusto2/rusto2.yaml
+      RUSTO2_JWKS_URL: http://rusto2-is:9000/.well-known/jwks.json
+      RUSTO2_ISSUER: http://localhost:9000
+      RUST_LOG: info,rusto2_gw=debug
+      MIMALLOC_PURGE_DELAY: "0"
+      MIMALLOC_ARENA_EAGER_COMMIT: "0"
+    volumes:
+      - ./rusto2.yaml:/etc/rusto2/rusto2.yaml:ro
+    ports:
+      - "8080:8080"
+    depends_on:
+      - rusto2-is
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  httpbin:
+    image: mccutchen/go-httpbin:2.26.0
+    environment:
+      MAX_BODY_SIZE: 10485760
+    ports:
+      - "8081:8080" # direct access, used for the benchmark baseline
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.16.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=1h
+      - --web.enable-lifecycle
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - rusto2-gw
+      - rusto2-is
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:13.2.6
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  rusto2-keys:
+  prometheus-data:
+  grafana-data:

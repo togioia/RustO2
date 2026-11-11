@@ -1,0 +1,60 @@
+server:
+  listen: 0.0.0.0:8080
+  trust_proxy: false
+  request_timeout_secs: 30
+  connect_timeout_secs: 5
+  pool_idle_timeout_secs: 90
+  pool_max_idle_per_host: 256
+
+identity:
+  issuer: http://localhost:9000
+  audience: rusto2
+  jwks_url: http://localhost:9000/.well-known/jwks.json
+  refresh_secs: 300
+  leeway_secs: 15
+
+routes:
+  # Protected route: JWT required, "read" scope, per-client token bucket and
+  # circuit breaker around the httpbin backend.
+  - name: httpbin
+    prefix: /api
+    upstream: http://httpbin:8080
+    strip_prefix: true
+    methods: [GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS]
+    auth:
+      mode: jwt
+      scopes: [read]
+    rate_limit:
+      rps: 100
+      burst: 200
+      key: client
+    circuit_breaker:
+      failure_threshold: 5
+      recovery_secs: 10
+
+  # Anonymous route, rate limited per client IP.
+  - name: public
+    prefix: /public
+    upstream: http://httpbin:8080
+    strip_prefix: true
+    methods: [GET]
+    auth:
+      mode: none
+    rate_limit:
+      rps: 10
+      burst: 10
+      key: ip
+
+  # Scope enforcement demo: only tokens carrying the "write" scope pass.
+  - name: admin
+    prefix: /admin
+    upstream: http://httpbin:8080
+    strip_prefix: true
+    methods: [GET]
+    auth:
+      mode: jwt
+      scopes: [write]
+    rate_limit:
+      rps: 30
+      burst: 60
+      key: client

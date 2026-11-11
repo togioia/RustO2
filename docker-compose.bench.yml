@@ -1,0 +1,7 @@
+# Benchmark overlay: disables per-route rate limiting so the gateway can be
+# measured at full throughput. JWT validation and JWKS caching stay enabled.
+services:
+  rusto2-gw:
+    environment:
+      RUSTO2_RATE_LIMIT_RPS: "0"
+      RUST_LOG: warn

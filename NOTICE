@@ -1,0 +1,12 @@
+RustO2
+Copyright 2026 Tommaso Gioia
+
+This product is an independent, from-scratch experiment inspired by the
+architecture and feature set of WSO2 middleware. It is not affiliated with,
+endorsed by, or sponsored by WSO2 LLC.
+
+WSO2, WSO2 API Manager, WSO2 Enterprise Integrator, WSO2 Micro Integrator and
+related names are trademarks or registered trademarks of WSO2 LLC. RustO2 uses
+these names only to describe the context and the problems it explores.
+
+RustO2 does not include or link any WSO2 source code or binary artifact.

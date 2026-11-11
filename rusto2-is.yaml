@@ -1,0 +1,19 @@
+server:
+  listen: 0.0.0.0:9000
+
+token:
+  issuer: http://localhost:9000
+  audience: rusto2
+  ttl_secs: 3600
+
+keys:
+  private_key_path: ./data/ed25519.pem
+  generate_if_missing: true
+
+clients:
+  - client_id: demo-client
+    client_secret: ${RUSTO2_DEMO_SECRET:-demo-secret}
+    scopes: [read, write, admin]
+  - client_id: readonly-client
+    client_secret: ${RUSTO2_READONLY_SECRET:-readonly-secret}
+    scopes: [read]
